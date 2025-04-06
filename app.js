@@ -7,7 +7,6 @@ import clientRoutes from './routes/clientRoutes.js';
 import imageRoutes from './routes/imageRoutes.js';
 import textRoutes from './routes/textRoutes.js';
 
-dotenv.config({ path: 'cert.env' });
 
 const app = express();
 
