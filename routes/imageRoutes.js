@@ -3,7 +3,7 @@ import multer from 'multer';
 import mongoose from 'mongoose';
 import { GridFSBucket } from 'mongodb';
 import Image from '../models/Image.js';
-import { serverRegistry } from '../utils/registries.js'; // Make sure the path is correct
+import { serverRegistry,buildKey } from '../utils/registries.js'; // Make sure the path is correct
 const router = express.Router();
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
