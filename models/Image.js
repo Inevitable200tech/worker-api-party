@@ -1,9 +1,10 @@
-import mongoose from 'mongoose';
+// This file defines a Mongoose model for an image, including its schema and export statement.
+export default (conn) => {
+  const imageSchema = new conn.Schema({
+    serverKey: { type: String, required: true },
+    imageUrl: { type: String, required: true, unique: true },
+    uploadDate: { type: Date, default: Date.now },
+  });
 
-const imageSchema = new mongoose.Schema({
-  serverKey: { type: String, required: true },
-  imageUrl: { type: String, required: true },
-  uploadDate: { type: Date, default: Date.now },
-});
-
-export default mongoose.model('Image', imageSchema);
+  return conn.model('Image', imageSchema);
+};

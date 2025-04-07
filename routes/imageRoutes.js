@@ -2,146 +2,120 @@ import express from 'express';
 import multer from 'multer';
 import mongoose from 'mongoose';
 import { GridFSBucket } from 'mongodb';
-import Image from '../models/Image.js';
-import { serverRegistry,buildKey } from '../utils/registries.js'; // Make sure the path is correct
+import { buildKey, serverRegistry } from '../utils/registries.js';
+import { getNextImageDB, connectToRecordDB } from '../config/db.js';
+import getImageModel from '../models/Image.js';
+
 const router = express.Router();
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
-const db = mongoose.connection; // Use active Mongoose connection
 
+// Bind Image model to record DB connection
+const recordDb = await connectToRecordDB();
+const Image = getImageModel(recordDb);
 
 router.post('/upload-image', upload.single('image'), async (req, res) => {
     const { client_ip, client_port, server_ip, server_port } = req.body;
+
     if (!client_ip || !client_port || !server_ip || !server_port) {
-        console.log('Missing client or server details during image upload');
         return res.status(400).json({ error: 'Client and server details are required' });
     }
 
     if (!req.file) {
-        console.log('No image uploaded');
         return res.status(400).json({ error: 'No image uploaded' });
     }
 
     const serverKey = buildKey(server_ip, server_port);
-    console.log(`Uploading image for server: ${serverKey}`);
+    const dbConn = getNextImageDB();
+    const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
 
     try {
-        const bucket = new GridFSBucket(db, { bucketName: 'images' });
-
         const uploadStream = bucket.openUploadStream(req.file.originalname, {
             contentType: 'image/png',
         });
 
         uploadStream.end(req.file.buffer);
 
-        uploadStream.on('error', (error) => {
-            console.error('Error uploading image:', error);
+        uploadStream.on('error', (err) => {
+            console.error('GridFS upload error:', err);
             res.status(500).json({ error: 'Failed to upload image' });
         });
 
         uploadStream.on('finish', async () => {
-            const imageUrl = `images/${uploadStream.id}`;
+            const dbName = dbConn.name;
+            const imageUrl = `${dbName}/images/${uploadStream.id}`;
 
-            // Save image record to database
-            const imageRecord = new Image({
-                serverKey,
-                imageUrl,
-            });
-
+            const imageRecord = new Image({ serverKey, imageUrl });
             await imageRecord.save();
-            console.log(`Image uploaded and saved: ${imageUrl}`);
+
             res.json({ message: 'Image uploaded successfully', imageUrl });
         });
-    } catch (error) {
-        console.error('Unexpected error:', error);
-        res.status(500).json({ error: 'An unexpected error occurred' });
+    } catch (err) {
+        console.error('Upload handler error:', err);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-router.get('/images/:imageId', async (req, res) => {
-    const { imageId } = req.params;
-    console.log(`Fetching image with ID: ${imageId}`);
+router.get('/images/:dbName/:imageId', async (req, res) => {
+    const { dbName, imageId } = req.params;
+    const objectId = new mongoose.Types.ObjectId(imageId);
 
     try {
-        // Check if the file exists
-        const bucket = new GridFSBucket(db, { bucketName: 'images' });
-        const objectId = new mongoose.Types.ObjectId(imageId);
+        const dbConn = mongoose.connection.useDb(dbName);
+        const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
 
-        const cursor = bucket.find({ _id: objectId });
-        const files = await cursor.toArray();
-
+        const files = await bucket.find({ _id: objectId }).toArray();
         if (files.length === 0) {
-            console.warn(`File not found in GridFS for ID: ${imageId}`);
             return res.status(404).json({ error: 'File not found' });
         }
 
-        // Stream the file
         const downloadStream = bucket.openDownloadStream(objectId);
         downloadStream.pipe(res);
 
-        downloadStream.on('error', (err) => {
-            console.error('Error streaming file:', err);
-            res.status(500).json({ error: 'Failed to stream file' });
-        });
-
         downloadStream.on('end', async () => {
-            console.log(`File streamed successfully for ID: ${imageId}`);
-
-            // Delete the metadata
-            const metadataDeleteResult = await Image.deleteOne({ imageUrl: `images/${imageId}` });
-            if (metadataDeleteResult.deletedCount === 0) {
-                console.warn(`Metadata for image ${imageId} not found.`);
-            }
-
-            // Delete the file
+            await Image.deleteOne({ imageUrl: `${dbName}/images/${imageId}` });
             bucket.delete(objectId, (err) => {
-                if (err) {
-                    if (err.message.includes('File not found')) {
-                        console.warn(`File not found in GridFS for ID: ${imageId}, skipping deletion.`);
-                    } else {
-                        console.error('Error during file deletion:', err);
-                    }
-                } else {
-                    console.log(`File deleted successfully for ID: ${imageId}`);
-                }
+                if (err) console.error('Error deleting file:', err);
             });
         });
-    } catch (error) {
-        console.error(`Error processing image ID ${imageId}:`, error);
-        res.status(500).json({ error: 'An error occurred while processing the image' });
+
+        downloadStream.on('error', (err) => {
+            console.error('Stream error:', err);
+            res.status(500).json({ error: 'Stream failed' });
+        });
+    } catch (err) {
+        console.error('Retrieve handler error:', err);
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
 router.post('/list-images', async (req, res) => {
     const { serverKey } = req.body;
+
     if (!serverKey) {
-        console.log('Missing serverKey during /list-images');
         return res.status(400).json({ message: 'Server key is required' });
     }
 
-    // Check if the server is active or exists
     if (!serverRegistry.has(serverKey)) {
-        console.log(`Server not found or inactive: ${serverKey}`);
         return res.status(404).json({ message: 'Server not found or inactive' });
     }
 
-    console.log(`Fetching images for server: ${serverKey}`);
-
     try {
-        // Fetch images for the serverKey
         const images = await Image.find({ serverKey }).select('imageUrl -_id');
 
         if (images.length === 0) {
-            console.log(`No images found for server: ${serverKey}`);
-            return res.status(404).json({ message: 'No images found for this server' });
+            return res.status(404).json({ message: 'No images found' });
         }
 
-        console.log(`Images found for server ${serverKey}:`, images);
-        res.json(images); // Directly return the images array
+        res.json(images);
     } catch (error) {
-        console.error(`Error fetching images for server ${serverKey}:`, error);
-        res.status(500).json({ message: 'An error occurred while listing images' });
+        console.error('List images error:', error);
+        res.status(500).json({ message: 'Server error' });
     }
 });
 
 export default router;
+export { router as imageRouter };
+export { upload as imageUpload };
+export { Image as imageModel };
+export { serverRegistry as imageServerRegistry };

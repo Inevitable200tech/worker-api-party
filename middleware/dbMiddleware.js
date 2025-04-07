@@ -3,16 +3,26 @@ import dotenv from 'dotenv';
 
 dotenv.config({ path: 'cert.env' });
 
-console.log('🔍 Loaded MONGODB_URI:', process.env.MONGODB_URI); // add this for debug
+const imageDbURIs = process.env.IMAGE_DB_URIS.split(','); // comma-separated
+const recordDbURI = process.env.RECORD_DB_URI;
 
-export const ensureDatabaseConnection = async (req, res, next) => {
-  if (mongoose.connection.readyState === 0) {
-    try {
-      await mongoose.connect(process.env.MONGODB_URI);
-    } catch (err) {
-      console.error('MongoDB connection error:', err.message);
-      return res.status(500).send('Database connection error');
-    }
-  }
-  next();
+let dbIndex = 0;
+const dbConnections = {};
+
+// connect to all image DBs and record DB
+imageDbURIs.forEach((uri, i) => {
+  dbConnections[`imgDb${i}`] = mongoose.createConnection(uri.trim(), {});
+});
+
+const recordDb = mongoose.createConnection(recordDbURI.trim(), {});
+dbConnections.recordDb = recordDb;
+
+export const getNextImageDb = () => {
+  const key = `imgDb${dbIndex}`;
+  dbIndex = (dbIndex + 1) % imageDbURIs.length;
+  return dbConnections[key];
+};
+
+export const getRecordDb = () => {
+  return dbConnections.recordDb;
 };
