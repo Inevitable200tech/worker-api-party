@@ -1,12 +1,15 @@
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-dotenv.config('../cert.env');
+dotenv.config({ path: 'cert.env' });
 
 const imageDbURIs = process.env.IMAGE_DB_URIS?.split(',') || [];
 const recordDbURI = process.env.RECORD_DB_URI;
 
 const imageConnections = [];
 let roundRobinIndex = 0;
+
+console.log('Loaded IMAGE_DB_URIS:', imageDbURIs);
+console.log('Loaded RECORD_DB_URI:', recordDbURI);
 
 export const connectToImageDBs = async () => {
   for (const uri of imageDbURIs) {
