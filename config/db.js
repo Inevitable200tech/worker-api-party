@@ -13,18 +13,27 @@ console.log('Loaded RECORD_DB_URI:', recordDbURI);
 
 export const connectToImageDBs = async () => {
   for (const rawUri of imageDbURIs) {
-    const uri = rawUri.trim().replace(/"/g, ''); // clean up any stray quotes
-    const conn = await mongoose.createConnection(uri).asPromise();
-    const urlObj = new URL(uri);
-    let dbName = urlObj.pathname.slice(1); // might be empty if just "/"
-    if (!dbName) {
-      dbName = urlObj.searchParams.get('appName') || 'default';
+    // Clean up the URI by trimming and removing stray quotes
+    const uri = rawUri.trim().replace(/"/g, '');
+    try {
+      const conn = await mongoose.createConnection(uri).asPromise();
+      const urlObj = new URL(uri);
+
+      // Extract the db name from the pathname; if empty use 'appName' query parameter or 'default'
+      let dbName = urlObj.pathname.slice(1);
+      if (!dbName) {
+        dbName = urlObj.searchParams.get('appName') || 'default';
+      }
+
+      conn.name = dbName;
+      imageConnections.push(conn);
+      console.log(`[INIT] Connected to image DB: ${dbName} from URI: ${uri}`);
+    } catch (error) {
+      console.error(`[INIT] Failed to connect using URI "${uri}":`, error);
     }
-    conn.name = dbName;
-    imageConnections.push(conn);
-    console.log(`[INIT] Connected to image DB: ${dbName}`);
   }
 };
+
 
 export const getNextImageDB = () => {
   if (!imageConnections.length) {
