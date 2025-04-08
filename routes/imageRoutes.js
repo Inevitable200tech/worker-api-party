@@ -3,7 +3,7 @@ import multer from 'multer';
 import mongoose from 'mongoose';
 import { GridFSBucket } from 'mongodb';
 import { buildKey, serverRegistry } from '../utils/registries.js';
-import { getNextImageDB, connectToRecordDB } from '../config/db.js';
+import { getNextImageDB, connectToRecordDB, imageConnections } from '../config/db.js';
 import getImageModel from '../models/Image.js';
 
 const router = express.Router();
@@ -71,9 +71,13 @@ router.get('/images/:dbName/:imageId', async (req, res) => {
     const objectId = new mongoose.Types.ObjectId(imageId);
 
     try {
-        const client = mongoose.connection.getClient(); // get native MongoClient
-        const db = client.db(dbName); // get specific DB by name
-        const bucket = new GridFSBucket(db, { bucketName: 'images' });
+        const dbConn = imageConnections.find(conn => conn.name === dbName);
+        if (!dbConn) {
+            console.error(`[DOWNLOAD] No DB connection found for name: ${dbName}`);
+            return res.status(500).json({ error: 'Database connection error' });
+        }
+        const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
+
 
 
         const files = await bucket.find({ _id: objectId }).toArray();
