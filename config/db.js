@@ -27,3 +27,5 @@ export const getNextImageDB = () => {
 export const connectToRecordDB = async () => {
   return mongoose.createConnection(recordDbURI).asPromise();
 };
+
+export {imageConnections};
