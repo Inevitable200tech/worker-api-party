@@ -71,8 +71,10 @@ router.get('/images/:dbName/:imageId', async (req, res) => {
     const objectId = new mongoose.Types.ObjectId(imageId);
 
     try {
-        const dbConn = mongoose.connection.useDb(dbName);
-        const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
+        const client = mongoose.connection.getClient(); // get native MongoClient
+        const db = client.db(dbName); // get specific DB by name
+        const bucket = new GridFSBucket(db, { bucketName: 'images' });
+
 
         const files = await bucket.find({ _id: objectId }).toArray();
         if (files.length === 0) {
@@ -85,8 +87,10 @@ router.get('/images/:dbName/:imageId', async (req, res) => {
 
         downloadStream.on('end', async () => {
             console.log(`[DOWNLOAD] Completed streaming ${imageId}, now deleting from DB`);
+            const imageUrl = `${dbName}/images/${imageId}`;
+            console.log(`[DOWNLOAD] Removing metadata for ${imageUrl}`);
+            await Image.deleteOne({ imageUrl });
 
-            await Image.deleteOne({ imageUrl: `${dbName}/images/${imageId}` });
             bucket.delete(objectId, (err) => {
                 if (err) console.error('[DOWNLOAD] Error deleting file:', err);
                 else console.log(`[DOWNLOAD] Deleted image ${imageId} from GridFS`);
