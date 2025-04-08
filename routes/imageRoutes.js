@@ -138,13 +138,17 @@ router.post('/list-images', async (req, res) => {
             return { imageUrl: `images/${dbName}/${imageId}` };
         });
 
-        console.log(`[LIST] Found ${images.length} image(s) for ${serverKey}`);
-        res.json(images);
+        console.log(`[LIST] Found ${images.length} image(s) for ${serverKey}:`);
+        images.forEach((img, idx) => {
+            console.log(`  ${idx + 1}. ${img.imageUrl}`);
+        });
 
+        res.json(images);
     } catch (error) {
         console.error('[LIST] Error listing images:', error);
         res.status(500).json({ message: 'Server error' });
     }
+
 });
 
 export default router;
