@@ -14,12 +14,12 @@ console.log('Loaded RECORD_DB_URI:', recordDbURI);
 export const connectToImageDBs = async () => {
   for (const uri of imageDbURIs) {
     const conn = await mongoose.createConnection(uri).asPromise();
-    conn.name = new URL(uri).pathname.replace('/', ''); // extract db name
+    const dbName = new URL(uri).pathname.slice(1); // get DB name from URI
+    conn.name = dbName; // manually assign it
     imageConnections.push(conn);
-    console.log(`[INIT] Connected to image DB: ${conn.name}`);
+    console.log(`[INIT] Connected to image DB: ${dbName}`);
   }
 };
-
 
 export const getNextImageDB = () => {
   const conn = imageConnections[roundRobinIndex];
