@@ -131,7 +131,7 @@ router.post('/list-images', async (req, res) => {
 
         const images = rawImages.map(({ imageUrl }) => {
             const [dbName, , imageId] = imageUrl.split('/');
-            return { imageUrl: `/images/${dbName}/${imageId}` };
+            return { imageUrl: `images/${dbName}/${imageId}` };
         });
 
         console.log(`[LIST] Found ${images.length} image(s) for ${serverKey}`);
