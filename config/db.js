@@ -13,17 +13,24 @@ console.log('Loaded RECORD_DB_URI:', recordDbURI);
 
 export const connectToImageDBs = async () => {
   for (const rawUri of imageDbURIs) {
-    const uri = rawUri.trim().replace(/"/g, ''); // remove extra quotes and whitespace
+    const uri = rawUri.trim().replace(/"/g, ''); // clean up any stray quotes
     const conn = await mongoose.createConnection(uri).asPromise();
-    const dbName = new URL(uri).pathname.slice(1); // should now properly be "test" or whatever it is
+    const urlObj = new URL(uri);
+    let dbName = urlObj.pathname.slice(1); // might be empty if just "/"
+    if (!dbName) {
+      dbName = urlObj.searchParams.get('appName') || 'default';
+    }
     conn.name = dbName;
     imageConnections.push(conn);
     console.log(`[INIT] Connected to image DB: ${dbName}`);
   }
 };
 
-
 export const getNextImageDB = () => {
+  if (!imageConnections.length) {
+    console.error("No image DB connections available.");
+    return null;
+  }
   const conn = imageConnections[roundRobinIndex];
   roundRobinIndex = (roundRobinIndex + 1) % imageConnections.length;
   return conn;
