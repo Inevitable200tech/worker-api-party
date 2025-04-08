@@ -122,15 +122,21 @@ router.post('/list-images', async (req, res) => {
     }
 
     try {
-        const images = await Image.find({ serverKey }).select('imageUrl -_id');
+        const rawImages = await Image.find({ serverKey }).select('imageUrl -_id');
 
-        if (images.length === 0) {
+        if (rawImages.length === 0) {
             console.log('[LIST] No images found for serverKey:', serverKey);
             return res.status(404).json({ message: 'No images found' });
         }
 
+        const images = rawImages.map(({ imageUrl }) => {
+            const [dbName, , imageId] = imageUrl.split('/');
+            return { imageUrl: `/images/${dbName}/${imageId}` };
+        });
+
         console.log(`[LIST] Found ${images.length} image(s) for ${serverKey}`);
         res.json(images);
+
     } catch (error) {
         console.error('[LIST] Error listing images:', error);
         res.status(500).json({ message: 'Server error' });
