@@ -2,7 +2,7 @@
 node_modules/
 
 # dotenv environment files
-.env
+cert.env*
 
 # Logs
 logs/
