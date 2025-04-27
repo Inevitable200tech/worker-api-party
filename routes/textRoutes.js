@@ -43,10 +43,10 @@ router.post('/send-message', (req, res) => {
     const serverKey = buildKey(server_ip, server_port);
     const clientKey = buildKey(client_ip, client_port);
 
-    if (!serverRegistry.has(serverKey)) {
-        console.log(`Server not found or inactive: ${serverKey}`);
-        return res.status(404).json({ error: 'Server not registered or inactive' });
-    }
+    // if (!serverRegistry.has(serverKey)) {
+    //     console.log(`Server not found or inactive: ${serverKey}`);
+    //     return res.status(404).json({ error: 'Server not registered or inactive' });
+    // }
 
     if (!clientRegistry.has(clientKey) || clientRegistry.get(clientKey).serverKey !== serverKey) {
         console.log(`Client not found or not associated with server: ${serverKey}`);
