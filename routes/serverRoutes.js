@@ -38,7 +38,7 @@ router.post('/heartbeat', (req, res) => {
 
     serverRegistry.get(serverKey).lastPing = Date.now();
     console.log(`Heartbeat received from ${serverKey}`);
-    res.json({ message: 'Heartbeat acknowledged', serverKey });
+    res.json({ message: 'Heartbeat acknowledged'});
 });
 
 // Check if a server is active
