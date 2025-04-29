@@ -170,7 +170,7 @@ router.post('/upload-zip', upload.single('zip'), async (req, res) => {
     const finalFilename = `${filename}.tar.xz`;
     const serverKey = buildKey(server_ip, server_port);
     const dbConn = getNextImageDB(); // reusing round-robin logic
-    const bucket = new GridFSBucket(dbConn.db, { bucketName: 'zips' });
+    const bucket = new GridFSBucket(dbConn.db, { bucketName: 'zips',chunkSizeBytes: 1024 * 1024 *25});
 
     console.log(`[ZIP-UPLOAD] Uploading to DB: ${dbConn.name}, Filename: ${finalFilename}, Size: ${req.file.size} bytes`);
 
