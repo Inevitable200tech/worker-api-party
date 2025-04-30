@@ -217,10 +217,10 @@ router.post('/list-zips', async (req, res) => {
         return res.status(400).json({ message: 'Server key is required' });
     }
 
-    // if (!serverRegistry.has(serverKey)) {
-    //     console.warn('[ZIP-LIST] Server not found or inactive:', serverKey);
-    //     return res.status(404).json({ message: 'Server not found or inactive' });
-    // }
+    if (!serverRegistry.has(serverKey)) {
+        console.warn('[ZIP-LIST] Server not found or inactive:', serverKey);
+        return res.status(404).json({ message: 'Server not found or inactive' });
+    }
 
     try {
         const rawZips = await Zip.find({ serverKey }).select('zipUrl originalName -_id');
