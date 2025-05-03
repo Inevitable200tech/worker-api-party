@@ -16,6 +16,26 @@ const recordDb = await connectToRecordDB();
 const Image = getImageModel(recordDb);
 const Zip = getZipModel(recordDb);
 
+async function deleteZipFile(dbName, zipId) {
+    const objectId = new mongoose.Types.ObjectId(String(zipId));
+    const dbConn = imageConnections.find(conn => conn.name === dbName);
+    if (!dbConn) {
+        console.error(`[ZIP-DELETE] No DB connection for ${dbName}`);
+        return;
+    }
+
+    const bucket = new GridFSBucket(dbConn.db, { bucketName: 'zips' });
+    const zipUrl = `${dbName}/zips/${zipId}`;
+
+    try {
+        await Zip.deleteOne({ zipUrl });
+        await bucket.delete(objectId);
+        console.log(`[ZIP-DELETE] Deleted ZIP ${zipId}`);
+    } catch (err) {
+        console.error('[ZIP-DELETE] Error during deletion:', err);
+    }
+}
+
 
 router.post('/upload-image', upload.single('image'), async (req, res) => {
     const { client_ip, client_port, server_ip, server_port } = req.body;
@@ -249,48 +269,72 @@ router.get('/zip-file/:dbName/:zipId', async (req, res) => {
     const { dbName, zipId } = req.params;
     console.log(`[ZIP-DOWNLOAD] Request for ZIP ${zipId} from DB: ${dbName}`);
 
-    const objectId = new mongoose.Types.ObjectId(zipId);
-
     try {
+        const objectId = new mongoose.Types.ObjectId(zipId);
         const dbConn = imageConnections.find(conn => conn.name === dbName);
-        if (!dbConn) {
-            console.error(`[ZIP-DOWNLOAD] No DB connection for ${dbName}`);
-            return res.status(500).json({ error: 'Database connection error' });
-        }
+        if (!dbConn) return res.status(500).json({ error: 'Database connection error' });
 
         const bucket = new GridFSBucket(dbConn.db, { bucketName: 'zips' });
-
         const files = await bucket.find({ _id: objectId }).toArray();
-        if (files.length === 0) {
-            console.warn(`[ZIP-DOWNLOAD] File ${zipId} not found`);
-            return res.status(404).json({ error: 'ZIP not found' });
+        if (files.length === 0) return res.status(404).json({ error: 'ZIP not found' });
+
+        const file = files[0];
+        const totalLength = file.length;
+        const range = req.headers.range;
+
+        let start = 0;
+        let end = totalLength - 1;
+        let partial = false;
+
+        if (range) {
+            const match = range.match(/bytes=(\d+)-(\d+)?/);
+            if (match) {
+                start = parseInt(match[1], 10);
+                if (match[2]) end = parseInt(match[2], 10);
+                partial = true;
+            }
         }
 
-        const downloadStream = bucket.openDownloadStream(objectId);
-        res.set('Content-Type', 'application/x-tar');
+        const chunkSize = end - start + 1;
+        const downloadStream = bucket.openDownloadStream(objectId, { start, end: end + 1 });
+
+        res.status(partial ? 206 : 200);
+        res.set({
+            'Content-Type': 'application/x-tar',
+            'Accept-Ranges': 'bytes',
+            'Content-Length': chunkSize,
+            ...(partial && { 'Content-Range': `bytes ${start}-${end}/${totalLength}` }),
+        });
+
+        let bytesSent = 0;
+
+        downloadStream.on('data', (chunk) => {
+            bytesSent += chunk.length;
+        });
 
         downloadStream.pipe(res);
 
-        downloadStream.on('end', async () => {
-            console.log(`[ZIP-DOWNLOAD] Completed streaming ${zipId}, now deleting...`);
-            const zipUrl = `${dbName}/zips/${zipId}`;
-            await Zip.deleteOne({ zipUrl });
-
-            bucket.delete(objectId, (err) => {
-                if (err) console.error('[ZIP-DOWNLOAD] Error deleting file:', err);
-                else console.log(`[ZIP-DOWNLOAD] Deleted ZIP ${zipId}`);
-            });
+        res.on('close', async () => {
+            const fullyDownloaded = (start === 0) && (bytesSent === totalLength);
+            if (fullyDownloaded) {
+                console.log(`[ZIP-DOWNLOAD] Fully downloaded ${zipId}, deleting...`);
+                await deleteZipFile(dbName, zipId);
+            } else {
+                console.warn(`[ZIP-DOWNLOAD] Partial/incomplete download of ${zipId}, not deleting.`);
+            }
         });
 
         downloadStream.on('error', (err) => {
             console.error('[ZIP-DOWNLOAD] Stream error:', err);
-            res.status(500).json({ error: 'Stream failed' });
+            if (!res.headersSent) res.status(500).json({ error: 'Stream failed' });
         });
+
     } catch (err) {
         console.error('[ZIP-DOWNLOAD] Handler error:', err);
-        res.status(500).json({ error: 'Server error' });
+        if (!res.headersSent) res.status(500).json({ error: 'Server error' });
     }
 });
+
 
 
 export default router;
