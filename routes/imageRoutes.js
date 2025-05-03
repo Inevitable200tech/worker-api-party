@@ -21,7 +21,7 @@ const Zip = getZipModel(recordDb);
 
 async function deleteZipFile(dbName, zipId) {
   const objectId = new mongoose.Types.ObjectId(zipId);
-  const dbConn   = imageConnections.find(c => c.name === dbName);
+  const dbConn = imageConnections.find(c => c.name === dbName);
   if (!dbConn) return console.error(`[ZIP-DELETE] No DB connection for ${dbName}`);
 
   const bucket = new GridFSBucket(dbConn.db, { bucketName: 'zips' });
@@ -216,8 +216,8 @@ router.post('/upload-zip', upload.single('zip'), async (req, res) => {
 
   // compute hash
   const sha256 = crypto.createHash('sha256')
-                       .update(req.file.buffer)
-                       .digest('hex');
+    .update(req.file.buffer)
+    .digest('hex');
   console.log('[ZIP-UPLOAD] Computed SHA256:', sha256);
 
   const finalFilename = `${filename}.tar.xz`;
@@ -233,7 +233,7 @@ router.post('/upload-zip', upload.single('zip'), async (req, res) => {
     bucketName: 'zips',
     chunkSizeBytes: 25 * 1024 * 1024
   });
-  console.log('[ZIP-UPLOAD] GridFSBucket initialized with chunkSizeBytes =', 25*1024*1024);
+  console.log('[ZIP-UPLOAD] GridFSBucket initialized with chunkSizeBytes =', 25 * 1024 * 1024);
 
   const uploadStream = bucket.openUploadStream(finalFilename, {
     contentType: 'application/x-tar',
@@ -280,7 +280,10 @@ router.post('/list-zips', async (req, res) => {
   if (!serverKey) {
     return res.status(400).json({ message: 'Server key is required' });
   }
-  const raw = await Zip.find({ serverKey }).select('zipUrl originalName -_id');
+  const raw = await Zip.find({
+    serverKey,
+    deletedAt: { $exists: false }
+  }).select('zipUrl originalName -_id');
   if (raw.length === 0) {
     return res.status(404).json({ message: 'No zips found' });
   }
