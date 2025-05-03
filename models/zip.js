@@ -7,6 +7,7 @@ export default (conn) => {
     originalName: { type: String, required: true },
     zipUrl: { type: String, required: true, unique: true },
     uploadDate: { type: Date, default: Date.now },
+    sha256: { type: String, required: true }    // ← new
   });
 
   return conn.model('Zip', zipSchema);
