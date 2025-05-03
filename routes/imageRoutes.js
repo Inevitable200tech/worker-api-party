@@ -331,7 +331,7 @@ router.get('/zip-file/:dbName/:zipId', async (req, res) => {
   stream.on('data', chunk => bytesSent += chunk.length);
   stream.pipe(res);
 
-  res.on('finish', async () => {
+  res.on('close', async () => {
     // only delete if entire file was sent in one shot
     if (start === 0 && bytesSent === totalLen) {
       await deleteZipFile(dbName, zipId);
