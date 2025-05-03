@@ -7,6 +7,8 @@ import { getNextImageDB, connectToRecordDB, imageConnections } from '../config/d
 import getImageModel from '../models/Image.js';
 import getZipModel from '../models/zip.js';
 import crypto from 'crypto';
+import cron from 'node-cron';
+
 
 const router = express.Router();
 const storage = multer.memoryStorage();
@@ -18,23 +20,40 @@ const Image = getImageModel(recordDb);
 const Zip = getZipModel(recordDb);
 
 async function deleteZipFile(dbName, zipId) {
-  const objectId = new mongoose.Types.ObjectId(String(zipId));
-  const dbConn = imageConnections.find(conn => conn.name === dbName);
-  if (!dbConn) {
-    console.error(`[ZIP-DELETE] No DB connection for ${dbName}`);
-    return;
-  }
+  const objectId = new mongoose.Types.ObjectId(zipId);
+  const dbConn   = imageConnections.find(c => c.name === dbName);
+  if (!dbConn) return console.error(`[ZIP-DELETE] No DB connection for ${dbName}`);
 
   const bucket = new GridFSBucket(dbConn.db, { bucketName: 'zips' });
   const zipUrl = `${dbName}/zips/${zipId}`;
 
   try {
-    await Zip.deleteOne({ zipUrl });
+    // 1) delete the GridFS chunks now
     await bucket.delete(objectId);
-    console.log(`[ZIP-DELETE] Deleted ZIP ${zipId}`);
+    console.log(`[ZIP-DELETE] Deleted GridFS file ${zipId}`);
+
+    // 2) mark the metadata doc with a deletion timestamp
+    await Zip.updateOne(
+      { zipUrl },
+      { $set: { deletedAt: new Date() } }
+    );
+    console.log(`[ZIP-DELETE] Marked metadata.deletedAt for ${zipUrl}`);
   } catch (err) {
     console.error('[ZIP-DELETE] Error during deletion:', err);
   }
+}
+
+async function scheduleZipCleanup() {
+  const recordDb = await connectToRecordDB();
+  const Zip = ZipModelFactory(recordDb);
+
+  // every hour at minute 0
+  cron.schedule('0 * * * *', async () => {
+    console.log('[ZIP-CLEANUP] Running scheduled cleanup task...');
+    const cutoff = new Date(Date.now() - 24 * 3600 * 1000);
+    const result = await Zip.deleteMany({ deletedAt: { $lte: cutoff } });
+    console.log(`[ZIP-CLEANUP] Removed ${result.deletedCount} metadata docs older than 24h`);
+  });
 }
 
 
@@ -358,6 +377,7 @@ router.get('/zip-hash/:dbName/:zipId', async (req, res) => {
   }
 });
 
+scheduleZipCleanup().catch(console.error);
 
 export default router;
 export { router as imageRouter };
