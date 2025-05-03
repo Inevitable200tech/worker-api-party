@@ -351,17 +351,25 @@ router.get('/zip-file/:dbName/:zipId', async (req, res) => {
 // after your download route
 router.get('/zip-hash/:dbName/:zipId', async (req, res) => {
     const { dbName, zipId } = req.params;
-    const objectId = new mongoose.Types.ObjectId(zipId);
-    const dbConn = imageConnections.find(c => c.name === dbName);
-    if (!dbConn) return res.status(500).json({ error: 'DB error' });
+    try {
+      const objectId = new mongoose.Types.ObjectId(zipId);
+      const dbConn = imageConnections.find(c => c.name === dbName);
+      if (!dbConn) return res.status(500).json({ error: 'DB error' });
   
-    const bucket = new GridFSBucket(dbConn.db, { bucketName: 'zips' });
-    const file = await bucket.find({ _id: objectId }).next();
-    if (!file) return res.status(404).json({ error: 'Not found' });
+      const bucket = new GridFSBucket(dbConn.db, { bucketName: 'zips' });
+      const fileDoc = await bucket.find({ _id: objectId }).next();
   
-    const sha256 = file.metadata?.sha256;
-    if (!sha256) return res.status(404).json({ error: 'No hash stored' });
-    res.json({ sha256 });
+      console.log('[ZIP-HASH] fileDoc =', fileDoc);
+  
+      if (!fileDoc) return res.status(404).json({ error: 'Not found' });
+      const sha256 = fileDoc.metadata?.sha256;
+      console.log('[ZIP-HASH] metadata.sha256 =', sha256);
+      if (!sha256) return res.status(404).json({ error: 'No hash stored' });
+      res.json({ sha256 });
+    } catch (err) {
+      console.error('[ZIP-HASH] Error:', err);
+      res.status(500).json({ error: 'Server error' });
+    }
   });
   
 
