@@ -173,57 +173,87 @@ router.post('/list-images', async (req, res) => {
 
 });
 
-// —–– ZIP UPLOAD (with SHA‑256)
+// —–– ZIP UPLOAD (with SHA‑256 and very‑verbose logging)
 router.post('/upload-zip', upload.single('zip'), async (req, res) => {
+  console.log('=== ZIP-UPLOAD START ===');
+  console.log('[ZIP-UPLOAD] Headers:', req.headers);
+  console.log('[ZIP-UPLOAD] Body:', req.body);
+
   const { server_ip, server_port, filename } = req.body;
   if (!server_ip || !server_port || !filename) {
+    console.warn('[ZIP-UPLOAD] Missing parameters:', { server_ip, server_port, filename });
     return res.status(400).json({ error: 'Server IP, port, and filename are required' });
   }
-  if (!req.file || !req.file.buffer) {
+
+  if (!req.file) {
+    console.warn('[ZIP-UPLOAD] req.file is empty');
     return res.status(400).json({ error: 'No .tar.xz file provided' });
   }
+  console.log('[ZIP-UPLOAD] Received file:', {
+    originalname: req.file.originalname,
+    mimetype: req.file.mimetype,
+    size: req.file.size
+  });
 
   // compute hash
   const sha256 = crypto.createHash('sha256')
-    .update(req.file.buffer)
-    .digest('hex');
+                       .update(req.file.buffer)
+                       .digest('hex');
+  console.log('[ZIP-UPLOAD] Computed SHA256:', sha256);
 
   const finalFilename = `${filename}.tar.xz`;
+  console.log('[ZIP-UPLOAD] finalFilename =', finalFilename);
+
   const serverKey = buildKey(server_ip, server_port);
+  console.log('[ZIP-UPLOAD] serverKey =', serverKey);
+
   const dbConn = getNextImageDB();
+  console.log('[ZIP-UPLOAD] using DB connection =', dbConn.name);
+
   const bucket = new GridFSBucket(dbConn.db, {
     bucketName: 'zips',
     chunkSizeBytes: 25 * 1024 * 1024
   });
-  console.log('[ZIP-UPLOAD] Computed SHA256:', sha256);
+  console.log('[ZIP-UPLOAD] GridFSBucket initialized with chunkSizeBytes =', 25*1024*1024);
 
   const uploadStream = bucket.openUploadStream(finalFilename, {
     contentType: 'application/x-tar',
     metadata: { sha256 }
   });
+  console.log('[ZIP-UPLOAD] openUploadStream() called, writing buffer…');
   uploadStream.end(req.file.buffer);
 
   uploadStream.on('error', err => {
-    console.error('[ZIP-UPLOAD] GridFS error:', err);
+    console.error('[ZIP-UPLOAD] GridFS stream error:', err);
+    console.log('=== ZIP-UPLOAD END (error) ===');
     if (!res.headersSent) res.status(500).json({ error: 'Failed to upload .tar.xz file' });
   });
 
   uploadStream.on('finish', async () => {
+    console.log('[ZIP-UPLOAD] GridFS upload finished, stream.id =', uploadStream.id);
     const dbName = dbConn.name;
     const zipUrl = `${dbName}/zips/${uploadStream.id}`;
+    console.log('[ZIP-UPLOAD] zipUrl =', zipUrl);
 
-    // save in Zip collection with hash
-    await Zip.create({
-      serverKey,
-      originalName: finalFilename,
-      zipUrl,
-      uploadDate: new Date(),
-      sha256
-    });
-    console.log('[ZIP-UPLOAD] Successfully uploaded .tar.xz file to', zipUrl);
-    res.json({ message: 'ZIP uploaded successfully', zipUrl, sha256 });
+    try {
+      const record = await Zip.create({
+        serverKey,
+        originalName: finalFilename,
+        zipUrl,
+        uploadDate: new Date(),
+        sha256
+      });
+      console.log('[ZIP-UPLOAD] Zip.create() succeeded:', record);
+      console.log('=== ZIP-UPLOAD END (success) ===');
+      res.json({ message: 'ZIP uploaded successfully', zipUrl, sha256 });
+    } catch (e) {
+      console.error('[ZIP-UPLOAD] Error saving Zip document:', e);
+      console.log('=== ZIP-UPLOAD END (error saving doc) ===');
+      if (!res.headersSent) res.status(500).json({ error: 'Failed to save ZIP metadata' });
+    }
   });
 });
+
 
 // —–– LIST ZIPS
 router.post('/list-zips', async (req, res) => {
@@ -296,18 +326,39 @@ router.get('/zip-file/:dbName/:zipId', async (req, res) => {
 });
 
 // —–– ZIP HASH from Zip collection
+// —–– ZIP HASH from Zip collection (with extra logging)
 router.get('/zip-hash/:dbName/:zipId', async (req, res) => {
   const { dbName, zipId } = req.params;
   const zipUrl = `${dbName}/zips/${zipId}`;
+
+  console.log('====================================');
+  console.log('[ZIP-HASH] endpoint hit');
+  console.log('[ZIP-HASH] params:', { dbName, zipId });
+  console.log('[ZIP-HASH] constructed zipUrl:', zipUrl);
+
   try {
-    const doc = await Zip.findOne({ zipUrl }).select('sha256 -_id');
-    if (!doc) return res.status(404).json({ error: 'Not found' });
+    // Show how many Zip documents exist at all
+    const totalZips = await Zip.countDocuments();
+    console.log('[ZIP-HASH] total Zip docs in collection:', totalZips);
+
+    // Attempt to find
+    const doc = await Zip.findOne({ zipUrl }).select('sha256 -_id').lean();
+    console.log('[ZIP-HASH] findOne({ zipUrl }) returned:', doc);
+
+    if (!doc) {
+      console.warn('[ZIP-HASH] ⚠️ no document matched that zipUrl');
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    console.log('[ZIP-HASH] ✅ returning sha256:', doc.sha256);
     res.json({ sha256: doc.sha256 });
   } catch (err) {
-    console.error('[ZIP-HASH] Error:', err);
+    console.error('[ZIP-HASH] 💥 error during lookup:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+
 export default router;
 export { router as imageRouter };
 export { upload as imageUpload };
