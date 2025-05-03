@@ -6,6 +6,7 @@ import { buildKey, serverRegistry } from '../utils/registries.js';
 import { getNextImageDB, connectToRecordDB, imageConnections } from '../config/db.js';
 import getImageModel from '../models/Image.js';
 import getZipModel from '../models/zip.js';
+import crypto from 'crypto';
 
 const router = express.Router();
 const storage = multer.memoryStorage();
@@ -174,60 +175,72 @@ router.post('/list-images', async (req, res) => {
 
 router.post('/upload-zip', upload.single('zip'), async (req, res) => {
     const { server_ip, server_port, filename } = req.body;
-
+  
     console.log(`[ZIP-UPLOAD] Received upload from ${server_ip}:${server_port}`);
-
+  
     if (!server_ip || !server_port || !filename) {
-        console.warn('[ZIP-UPLOAD] Missing server details or filename');
-        return res.status(400).json({ error: 'Server IP, port, and filename are required' });
+      return res.status(400).json({ error: 'Server IP, port, and filename are required' });
     }
-
-    if (!req.file) {
-        console.warn('[ZIP-UPLOAD] No file uploaded');
-        return res.status(400).json({ error: 'No .tar.xz file provided' });
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ error: 'No .tar.xz file provided' });
     }
-
+  
+    // 1) compute SHA‑256 of the buffer
+    const sha256 = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+  
     const finalFilename = `${filename}.tar.xz`;
     const serverKey = buildKey(server_ip, server_port);
-    const dbConn = getNextImageDB(); // reusing round-robin logic
-    const bucket = new GridFSBucket(dbConn.db, { bucketName: 'zips',chunkSizeBytes: 1024 * 1024 *25});
-
-    console.log(`[ZIP-UPLOAD] Uploading to DB: ${dbConn.name}, Filename: ${finalFilename}, Size: ${req.file.size} bytes`);
-
+  
+    // 2) pick a DB via round‑robin
+    const dbConn = getNextImageDB();
+    const bucket = new GridFSBucket(dbConn.db, {
+      bucketName: 'zips',
+      chunkSizeBytes: 25 * 1024 * 1024
+    });
+  
+    console.log(
+      `[ZIP-UPLOAD] Uploading to DB: ${dbConn.name}, ` +
+      `Filename: ${finalFilename}, Size: ${req.file.size} bytes, SHA256: ${sha256}`
+    );
+  
     try {
-        const uploadStream = bucket.openUploadStream(finalFilename, {
-            contentType: 'application/x-tar',
+      // 3) open upload stream with metadata
+      const uploadStream = bucket.openUploadStream(finalFilename, {
+        contentType: 'application/x-tar',
+        metadata: { sha256 }
+      });
+  
+      // write the buffer and end
+      uploadStream.end(req.file.buffer);
+  
+      uploadStream.on('error', err => {
+        console.error('[ZIP-UPLOAD] GridFS error:', err);
+        if (!res.headersSent) res.status(500).json({ error: 'Failed to upload .tar.xz file' });
+      });
+  
+      uploadStream.on('finish', async () => {
+        // 4) store a record in your Zip collection
+        const dbName = dbConn.name;
+        const zipUrl = `${dbName}/zips/${uploadStream.id}`;
+  
+        const zipRecord = new Zip({
+          serverKey,
+          originalName: finalFilename,
+          zipUrl,
+          uploadDate: new Date()
         });
-
-        uploadStream.end(req.file.buffer);
-
-        uploadStream.on('error', (err) => {
-            console.error('[ZIP-UPLOAD] GridFS error:', err);
-            res.status(500).json({ error: 'Failed to upload .tar.xz file' });
-        });
-
-        uploadStream.on('finish', async () => {
-            const dbName = dbConn.name;
-            const zipUrl = `${dbName}/zips/${uploadStream.id}`;
-
-            const zipRecord = new Zip({
-                serverKey,
-                originalName: finalFilename,
-                zipUrl,
-            });
-
-            await zipRecord.save();
-
-            console.log(`[ZIP-UPLOAD] Successfully stored ZIP at ${zipUrl}`);
-            res.json({ message: 'ZIP uploaded successfully', zipUrl });
-        });
+  
+        await zipRecord.save();
+  
+        console.log(`[ZIP-UPLOAD] Stored ZIP at ${zipUrl} with SHA256 ${sha256}`);
+        res.json({ message: 'ZIP uploaded successfully', zipUrl, sha256 });
+      });
     } catch (err) {
-        console.error('[ZIP-UPLOAD] Handler error:', err);
-        res.status(500).json({ error: 'Internal server error' });
+      console.error('[ZIP-UPLOAD] Handler error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'Internal server error' });
     }
-});
-
-
+  });
+  
 router.post('/list-zips', async (req, res) => {
     const { serverKey } = req.body;
     console.log('[ZIP-LIST] Listing ZIPs for serverKey:', serverKey);
@@ -335,7 +348,22 @@ router.get('/zip-file/:dbName/:zipId', async (req, res) => {
     }
 });
 
-
+// after your download route
+router.get('/zip-hash/:dbName/:zipId', async (req, res) => {
+    const { dbName, zipId } = req.params;
+    const objectId = new mongoose.Types.ObjectId(zipId);
+    const dbConn = imageConnections.find(c => c.name === dbName);
+    if (!dbConn) return res.status(500).json({ error: 'DB error' });
+  
+    const bucket = new GridFSBucket(dbConn.db, { bucketName: 'zips' });
+    const file = await bucket.find({ _id: objectId }).next();
+    if (!file) return res.status(404).json({ error: 'Not found' });
+  
+    const sha256 = file.metadata?.sha256;
+    if (!sha256) return res.status(404).json({ error: 'No hash stored' });
+    res.json({ sha256 });
+  });
+  
 
 export default router;
 export { router as imageRouter };
