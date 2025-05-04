@@ -370,7 +370,7 @@ router.get('/zip-hash/:dbName/:zipId', async (req, res) => {
 
 function scheduleDeletionLogger() {
   // cron expression: “every 30 seconds”
-  cron.schedule('*/30 * * * * *', async () => {
+  cron.schedule('*/60 * * * * *', async () => {
     try {
       const now = Date.now();
       // find all docs that have been marked deleted
