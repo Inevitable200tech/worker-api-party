@@ -19,6 +19,8 @@ const recordDb = await connectToRecordDB();
 const Image = getImageModel(recordDb);
 const Zip = getZipModel(recordDb);
 
+scheduleDeletionLogger();
+
 async function deleteZipFile(dbName, zipId) {
   const objectId = new mongoose.Types.ObjectId(String(zipId));
   const dbConn = imageConnections.find(c => c.name === dbName);
@@ -365,6 +367,44 @@ router.get('/zip-hash/:dbName/:zipId', async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+function scheduleDeletionLogger() {
+  // cron expression: “every 30 seconds”
+  cron.schedule('*/30 * * * * *', async () => {
+    try {
+      const now = Date.now();
+      // find all docs that have been marked deleted
+      const toDelete = await Zip.find({ deletedAt: { $exists: true } })
+                                .select('zipUrl deletedAt -_id')
+                                .lean();
+
+      if (toDelete.length === 0) {
+        console.log('[DELETION‑LOGGER] No metadata pending TTL‑deletion');
+        return;
+      }
+
+      console.log(`\n[DELETION‑LOGGER] ${toDelete.length} ZIP(s) pending TTL removal:`);
+      toDelete.forEach(doc => {
+        const deletedMs   = new Date(doc.deletedAt).getTime();
+        const expireMs    = deletedMs + 24 * 3600 * 1000;
+        const msRemaining = expireMs - now;
+        const secTotal    = Math.max(0, Math.floor(msRemaining / 1000));
+      
+        // convert to hours, minutes, seconds
+        const hours   = Math.floor(secTotal / 3600);
+        const minutes = Math.floor((secTotal % 3600) / 60);
+        const seconds = secTotal % 60;
+      
+        console.log(` • ${doc.zipUrl}`);
+        console.log(`     deletedAt:    ${doc.deletedAt}`);
+        console.log(`     expires in:  ${hours}h ${minutes}m ${seconds}s`);
+      });
+      
+    } catch (err) {
+      console.error('[DELETION‑LOGGER] error fetching metadata:', err);
+    }
+  });
+}
 
 
 export default router;
