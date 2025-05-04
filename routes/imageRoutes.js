@@ -20,7 +20,7 @@ const Image = getImageModel(recordDb);
 const Zip = getZipModel(recordDb);
 
 async function deleteZipFile(dbName, zipId) {
-  const objectId = new mongoose.Types.ObjectId(zipId);
+  const objectId = new mongoose.Types.ObjectId(String(zipId));
   const dbConn = imageConnections.find(c => c.name === dbName);
   if (!dbConn) return console.error(`[ZIP-DELETE] No DB connection for ${dbName}`);
 
@@ -47,8 +47,8 @@ async function scheduleZipCleanup() {
   const recordDb = await connectToRecordDB();
   const Zip = ZipModelFactory(recordDb);
 
-  // every hour at minute 0
-  cron.schedule('0 * * * *', async () => {
+  // every minute
+  cron.schedule('* * * * *', async () => {
     console.log('[ZIP-CLEANUP] Running scheduled cleanup task...');
     const cutoff = new Date(Date.now() - 24 * 3600 * 1000);
     const result = await Zip.deleteMany({ deletedAt: { $lte: cutoff } });
@@ -334,7 +334,7 @@ router.get('/zip-file/:dbName/:zipId', async (req, res) => {
   stream.on('data', chunk => bytesSent += chunk.length);
   stream.pipe(res);
 
-  res.on('close', async () => {
+  res.on('finish', async () => {
     // only delete if entire file was sent in one shot
     if (start === 0 && bytesSent === totalLen) {
       await deleteZipFile(dbName, zipId);
