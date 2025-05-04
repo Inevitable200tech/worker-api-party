@@ -43,20 +43,6 @@ async function deleteZipFile(dbName, zipId) {
   }
 }
 
-async function scheduleZipCleanup() {
-  const recordDb = await connectToRecordDB();
-  const Zip = ZipModelFactory(recordDb);
-
-  // every minute
-  cron.schedule('* * * * *', async () => {
-    console.log('[ZIP-CLEANUP] Running scheduled cleanup task...');
-    const cutoff = new Date(Date.now() - 24 * 3600 * 1000);
-    const result = await Zip.deleteMany({ deletedAt: { $lte: cutoff } });
-    console.log(`[ZIP-CLEANUP] Removed ${result.deletedCount} metadata docs older than 24h`);
-  });
-}
-
-
 router.post('/upload-image', upload.single('image'), async (req, res) => {
   const { client_ip, client_port, server_ip, server_port } = req.body;
 
@@ -380,7 +366,6 @@ router.get('/zip-hash/:dbName/:zipId', async (req, res) => {
   }
 });
 
-scheduleZipCleanup().catch(console.error);
 
 export default router;
 export { router as imageRouter };
