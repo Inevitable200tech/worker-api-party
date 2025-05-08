@@ -42,21 +42,32 @@ router.post('/heartbeat', (req, res) => {
 });
 
 // Check if a server is active
+// Check if a server is active and optionally whether a client is associated with it
 router.post('/list-servers', (req, res) => {
-    const { serverKey } = req.body;
+    const { serverKey, clientKey } = req.body;
 
     if (!serverKey) {
         console.log('Missing serverKey during /list-servers');
         return res.status(400).json({ error: 'Server key (ip:port) is required' });
     }
 
-    if (serverRegistry.has(serverKey)) {
-        console.log(`Server found: ${serverKey}`);
-        res.json({ message: 'Server is active', serverKey });
-    } else {
+    if (!serverRegistry.has(serverKey)) {
         console.log(`Server not found or inactive: ${serverKey}`);
-        res.status(404).json({ error: 'Server not found or inactive' });
+        return res.status(404).json({ error: 'Server not found or inactive' });
     }
+
+    if (clientKey) {
+        const clientData = clientRegistry.get(clientKey);
+        if (clientData && clientData.serverKey === serverKey) {
+            return res.json({ message: 'Server Active and associated' });
+        } else {
+            return res.json({ message: 'Server Active but not associated' });
+        }
+    }
+    else{
+        return res.status(400).json({error: 'Client Ip:port required'})
+    }
+
 });
 
 export default router

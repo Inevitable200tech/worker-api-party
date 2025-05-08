@@ -1,4 +1,4 @@
-// Registries
+// Registries 
 export const serverRegistry = new Map(); // { "ip:port": { lastPing: timestamp } }
 export const clientRegistry = new Map(); // { "client_ip:client_port": { serverKey: "ip:port" } }
 export const clientToServerMessages = new Map(); // { "clientKey": [{ serverKey, text, timestamp }] }
