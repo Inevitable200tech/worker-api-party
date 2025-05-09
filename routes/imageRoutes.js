@@ -6,6 +6,7 @@ import { buildKey, serverRegistry } from '../utils/registries.js';
 import { getNextImageDB, connectToRecordDB, imageConnections } from '../config/db.js';
 import getImageModel from '../models/Image.js';
 import getZipModel from '../models/zip.js';
+import { Readable } from 'stream';
 import crypto from 'crypto';
 import cron from 'node-cron';
 
@@ -227,8 +228,10 @@ router.post('/upload-zip', upload.single('zip'), async (req, res) => {
     contentType: 'application/x-tar',
     metadata: { sha256 }
   });
-  console.log('[ZIP-UPLOAD] openUploadStream() called, writing buffer…');
-  uploadStream.end(req.file.buffer);
+
+  console.log('[ZIP-UPLOAD] openUploadStream() called, streaming buffer…');
+  const bufferStream = Readable.from(req.file.buffer);
+  bufferStream.pipe(uploadStream);
 
   uploadStream.on('error', err => {
     console.error('[ZIP-UPLOAD] GridFS stream error:', err);
@@ -375,8 +378,8 @@ function scheduleDeletionLogger() {
       const now = Date.now();
       // find all docs that have been marked deleted
       const toDelete = await Zip.find({ deletedAt: { $exists: true } })
-                                .select('zipUrl deletedAt -_id')
-                                .lean();
+        .select('zipUrl deletedAt -_id')
+        .lean();
 
       if (toDelete.length === 0) {
         console.log('[DELETION‑LOGGER] No metadata pending TTL‑deletion');
@@ -385,21 +388,21 @@ function scheduleDeletionLogger() {
 
       console.log(`\n[DELETION‑LOGGER] ${toDelete.length} ZIP(s) pending TTL removal:`);
       toDelete.forEach(doc => {
-        const deletedMs   = new Date(doc.deletedAt).getTime();
-        const expireMs    = deletedMs + 24 * 3600 * 1000;
+        const deletedMs = new Date(doc.deletedAt).getTime();
+        const expireMs = deletedMs + 24 * 3600 * 1000;
         const msRemaining = expireMs - now;
-        const secTotal    = Math.max(0, Math.floor(msRemaining / 1000));
-      
+        const secTotal = Math.max(0, Math.floor(msRemaining / 1000));
+
         // convert to hours, minutes, seconds
-        const hours   = Math.floor(secTotal / 3600);
+        const hours = Math.floor(secTotal / 3600);
         const minutes = Math.floor((secTotal % 3600) / 60);
         const seconds = secTotal % 60;
-      
+
         console.log(` • ${doc.zipUrl}`);
         console.log(`     deletedAt:    ${doc.deletedAt}`);
         console.log(`     expires in:  ${hours}h ${minutes}m ${seconds}s`);
       });
-      
+
     } catch (err) {
       console.error('[DELETION‑LOGGER] error fetching metadata:', err);
     }
