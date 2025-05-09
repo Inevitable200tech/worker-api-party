@@ -220,9 +220,9 @@ router.post('/upload-zip', upload.single('zip'), async (req, res) => {
 
   const bucket = new GridFSBucket(dbConn.db, {
     bucketName: 'zips',
-    chunkSizeBytes: 150 * 1024 * 1024
+    chunkSizeBytes: 15 * 1024 * 1024
   });
-  console.log('[ZIP-UPLOAD] GridFSBucket initialized with chunkSizeBytes =', 25 * 1024 * 1024);
+  console.log('[ZIP-UPLOAD] GridFSBucket initialized with chunkSizeBytes =', 15 * 1024 * 1024);
 
   const uploadStream = bucket.openUploadStream(finalFilename, {
     contentType: 'application/x-tar',
