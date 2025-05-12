@@ -229,13 +229,18 @@ router.post('/upload-zip-chunk', upload.single('chunk'), async (req, res) => {
   res.status(200).json({ message: 'Chunk uploaded' });
 });
 
-// Endpoint to finalize the upload
 router.post('/finalize-zip-upload', async (req, res) => {
   console.log('=== ZIP-FINALIZE-UPLOAD START ===');
+  console.log('[ZIP-FINALIZE-UPLOAD] Content-Type:', req.get('Content-Type'));
+  console.log('[ZIP-FINALIZE-UPLOAD] Request body:', req.body);
+
   const { server_ip, server_port, filename } = req.body;
 
-  if (!server_ip || !server_port || !filename) {
+  if (!server_ip || !server_port || filename === undefined) {
     console.warn('[ZIP-FINALIZE-UPLOAD] Missing parameters');
+    console.warn('[ZIP-FINALIZE-UPLOAD] server_ip:', server_ip);
+    console.warn('[ZIP-FINALIZE-UPLOAD] server_port:', server_port);
+    console.warn('[ZIP-FINALIZE-UPLOAD] filename:', filename);
     return res.status(400).json({ error: 'Server IP, port, and filename are required' });
   }
 
@@ -250,7 +255,6 @@ router.post('/finalize-zip-upload', async (req, res) => {
   const storage = zipChunkStorage.get(storageKey);
   const { chunks, totalChunks } = storage;
 
-  // Verify all chunks are present
   for (let i = 0; i < totalChunks; i++) {
     if (!chunks[i]) {
       console.warn('[ZIP-FINALIZE-UPLOAD] Missing chunk', i);
@@ -258,7 +262,6 @@ router.post('/finalize-zip-upload', async (req, res) => {
     }
   }
 
-  // Merge chunks
   const buffer = Buffer.concat(chunks);
   const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
   const finalFilename = `${filename}.tar.xz`;
@@ -300,7 +303,7 @@ router.post('/finalize-zip-upload', async (req, res) => {
       console.error('[ZIP-FINALIZE-UPLOAD] Error saving Zip:', e);
       if (!res.headersSent) res.status(500).json({ error: 'Failed to save ZIP metadata' });
     } finally {
-      zipChunkStorage.delete(storageKey); // Clean up memory
+      zipChunkStorage.delete(storageKey);
     }
   });
 });
