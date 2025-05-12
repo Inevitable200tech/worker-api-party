@@ -10,6 +10,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const MAX_DB_CAPACITY_MB = 512; // Each database max capacity
 
