@@ -20,7 +20,21 @@ const recordDb = await connectToRecordDB();
 const Image = getImageModel(recordDb);
 const Zip = getZipModel(recordDb);
 
+// In-memory storage for chunks
+const zipChunkStorage = new Map();
+
 scheduleDeletionLogger();
+
+// Clean up old chunks (older than 15 minutes)
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of zipChunkStorage.entries()) {
+    const lastModified = value.lastModified || now;
+    if (now - lastModified > 15 * 30 * 1000) {// 15 minutes
+      zipChunkStorage.delete(key);
+    }
+  }
+}, 15 * 60 * 1000); // Run every 15 minutes
 
 async function deleteZipFile(dbName, zipId) {
   const objectId = new mongoose.Types.ObjectId(String(zipId));
@@ -181,69 +195,96 @@ router.post('/list-images', async (req, res) => {
 
 });
 
-// —–– ZIP UPLOAD (with SHA‑256 and very‑verbose logging)
-router.post('/upload-zip', upload.single('zip'), async (req, res) => {
-  console.log('=== ZIP-UPLOAD START ===');
-  console.log('[ZIP-UPLOAD] Headers:', req.headers);
-  console.log('[ZIP-UPLOAD] Body:', req.body);
+// Endpoint to upload a single chunk
+router.post('/upload-zip-chunk', upload.single('chunk'), async (req, res) => {
+  console.log('=== ZIP-CHUNK-UPLOAD START ===');
+  const { server_ip, server_port, filename, chunkIndex, totalChunks } = req.body;
 
-  const { server_ip, server_port, filename } = req.body;
-  if (!server_ip || !server_port || !filename) {
-    console.warn('[ZIP-UPLOAD] Missing parameters:', { server_ip, server_port, filename });
-    return res.status(400).json({ error: 'Server IP, port, and filename are required' });
+  if (!server_ip || !server_port || !filename || !chunkIndex || !totalChunks) {
+    console.warn('[ZIP-CHUNK-UPLOAD] Missing parameters');
+    return res.status(400).json({ error: 'Server IP, port, filename, chunkIndex, and totalChunks are required' });
   }
 
   if (!req.file) {
-    console.warn('[ZIP-UPLOAD] req.file is empty');
-    return res.status(400).json({ error: 'No .tar.xz file provided' });
+    console.warn('[ZIP-CHUNK-UPLOAD] No chunk provided');
+    return res.status(400).json({ error: 'No chunk provided' });
   }
-  console.log('[ZIP-UPLOAD] Received file:', {
-    originalname: req.file.originalname,
-    mimetype: req.file.mimetype,
-    size: req.file.size
-  });
-
-  // compute hash
-  const sha256 = crypto.createHash('sha256')
-    .update(req.file.buffer)
-    .digest('hex');
-  console.log('[ZIP-UPLOAD] Computed SHA256:', sha256);
-
-  const finalFilename = `${filename}.tar.xz`;
-  console.log('[ZIP-UPLOAD] finalFilename =', finalFilename);
 
   const serverKey = buildKey(server_ip, server_port);
-  console.log('[ZIP-UPLOAD] serverKey =', serverKey);
+  const storageKey = `${serverKey}-${filename}`;
+
+  if (!zipChunkStorage.has(storageKey)) {
+    zipChunkStorage.set(storageKey, {
+      chunks: new Array(parseInt(totalChunks)),
+      totalChunks: parseInt(totalChunks),
+      lastModified: Date.now()
+    });
+  }
+
+  const storage = zipChunkStorage.get(storageKey);
+  storage.chunks[parseInt(chunkIndex)] = req.file.buffer;
+  storage.lastModified = Date.now();
+
+  console.log('[ZIP-CHUNK-UPLOAD] Stored chunk', chunkIndex);
+  res.status(200).json({ message: 'Chunk uploaded' });
+});
+
+// Endpoint to finalize the upload
+router.post('/finalize-zip-upload', async (req, res) => {
+  console.log('=== ZIP-FINALIZE-UPLOAD START ===');
+  const { server_ip, server_port, filename } = req.body;
+
+  if (!server_ip || !server_port || !filename) {
+    console.warn('[ZIP-FINALIZE-UPLOAD] Missing parameters');
+    return res.status(400).json({ error: 'Server IP, port, and filename are required' });
+  }
+
+  const serverKey = buildKey(server_ip, server_port);
+  const storageKey = `${serverKey}-${filename}`;
+
+  if (!zipChunkStorage.has(storageKey)) {
+    console.warn('[ZIP-FINALIZE-UPLOAD] No chunks found');
+    return res.status(400).json({ error: 'No chunks found for this upload' });
+  }
+
+  const storage = zipChunkStorage.get(storageKey);
+  const { chunks, totalChunks } = storage;
+
+  // Verify all chunks are present
+  for (let i = 0; i < totalChunks; i++) {
+    if (!chunks[i]) {
+      console.warn('[ZIP-FINALIZE-UPLOAD] Missing chunk', i);
+      return res.status(400).json({ error: `Missing chunk ${i}` });
+    }
+  }
+
+  // Merge chunks
+  const buffer = Buffer.concat(chunks);
+  const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+  const finalFilename = `${filename}.tar.xz`;
 
   const dbConn = getNextImageDB();
-  console.log('[ZIP-UPLOAD] using DB connection =', dbConn.name);
-
   const bucket = new GridFSBucket(dbConn.db, {
     bucketName: 'zips',
     chunkSizeBytes: 15 * 1024 * 1024
   });
-  console.log('[ZIP-UPLOAD] GridFSBucket initialized with chunkSizeBytes =', 15 * 1024 * 1024);
 
   const uploadStream = bucket.openUploadStream(finalFilename, {
     contentType: 'application/x-tar',
     metadata: { sha256 }
   });
 
-  console.log('[ZIP-UPLOAD] openUploadStream() called, streaming buffer…');
-  const bufferStream = Readable.from(req.file.buffer);
+  const bufferStream = Readable.from(buffer);
   bufferStream.pipe(uploadStream);
 
-  uploadStream.on('error', err => {
-    console.error('[ZIP-UPLOAD] GridFS stream error:', err);
-    console.log('=== ZIP-UPLOAD END (error) ===');
+  uploadStream.on('error', (err) => {
+    console.error('[ZIP-FINALIZE-UPLOAD] GridFS stream error:', err);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to upload .tar.xz file' });
   });
 
   uploadStream.on('finish', async () => {
-    console.log('[ZIP-UPLOAD] GridFS upload finished, stream.id =', uploadStream.id);
     const dbName = dbConn.name;
     const zipUrl = `${dbName}/zips/${uploadStream.id}`;
-    console.log('[ZIP-UPLOAD] zipUrl =', zipUrl);
 
     try {
       const record = await Zip.create({
@@ -253,13 +294,13 @@ router.post('/upload-zip', upload.single('zip'), async (req, res) => {
         uploadDate: new Date(),
         sha256
       });
-      console.log('[ZIP-UPLOAD] Zip.create() succeeded:', record);
-      console.log('=== ZIP-UPLOAD END (success) ===');
+      console.log('[ZIP-FINALIZE-UPLOAD] Zip created:', record);
       res.json({ message: 'ZIP uploaded successfully', zipUrl, sha256 });
     } catch (e) {
-      console.error('[ZIP-UPLOAD] Error saving Zip document:', e);
-      console.log('=== ZIP-UPLOAD END (error saving doc) ===');
+      console.error('[ZIP-FINALIZE-UPLOAD] Error saving Zip:', e);
       if (!res.headersSent) res.status(500).json({ error: 'Failed to save ZIP metadata' });
+    } finally {
+      zipChunkStorage.delete(storageKey); // Clean up memory
     }
   });
 });
