@@ -180,7 +180,7 @@ router.get('/images/:dbName/:imageId', async (req, res) => {
     const downloadStream = bucket.openDownloadStream(objectId);
     downloadStream.pipe(res);
 
-    downloadStream.on('finish', async () => {
+    downloadStream.on('close', async () => {
       console.log(`[DOWNLOAD] Completed streaming ${imageId}, now deleting from DB`);
       const imageUrl = `${dbName}/images/${imageId}`;
       console.log(`[DOWNLOAD] Removing metadata for ${imageUrl}`);
