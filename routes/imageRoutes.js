@@ -65,7 +65,6 @@ router.post('/upload-image', upload.single('image'), async (req, res) => {
 
   console.log('[UPLOAD] Received request from client:', { client_ip, client_port, server_ip, server_port });
 
-  // Validate required fields
   if (!client_ip || !client_port || !server_ip || !server_port) {
     console.warn('[UPLOAD] Missing required client/server details');
     return res.status(400).json({ error: 'Client and server details are required' });
@@ -80,7 +79,7 @@ router.post('/upload-image', upload.single('image'), async (req, res) => {
   const dbConn = getNextImageDB();
   if (!dbConn) {
     console.error('[UPLOAD] No database connection available');
-    return res.status(503).json({ error: 'Service unavailable: No database connection available' });
+    return res.status(500).json({ error: 'No database connection available' });
   }
   const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
 
@@ -90,7 +89,7 @@ router.post('/upload-image', upload.single('image'), async (req, res) => {
   let uploadStreamId = null;
 
   try {
-    // Step 1: Upload the image to GridFS with retry logic
+    // Step 1: Upload the image to GridFS and verify it exists
     const imageUrl = await new Promise((resolve, reject) => {
       const uploadStream = bucket.openUploadStream(req.file.originalname, {
         contentType: 'image/png',
@@ -144,7 +143,6 @@ router.post('/upload-image', upload.single('image'), async (req, res) => {
     console.log(`[UPLOAD] Image uploaded successfully to ${imageUrl}`);
     res.json({ message: 'Image uploaded successfully', imageUrl });
   } catch (err) {
-    // Log the error but don't crash the API
     console.error('[UPLOAD] Handler error:', err.message);
     // Clean up GridFS file if it exists but an error occurred
     if (uploadStreamId) {
@@ -155,7 +153,6 @@ router.post('/upload-image', upload.single('image'), async (req, res) => {
         console.error('[UPLOAD] Failed to clean up GridFS file:', deleteErr);
       }
     }
-    // Respond with an error but keep the API running
     res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
@@ -183,7 +180,7 @@ router.get('/images/:dbName/:imageId', async (req, res) => {
     const downloadStream = bucket.openDownloadStream(objectId);
     downloadStream.pipe(res);
 
-    downloadStream.on('end', async () => {
+    downloadStream.on('finish', async () => {
       console.log(`[DOWNLOAD] Completed streaming ${imageId}, now deleting from DB`);
       const imageUrl = `${dbName}/images/${imageId}`;
       console.log(`[DOWNLOAD] Removing metadata for ${imageUrl}`);
