@@ -65,6 +65,7 @@ router.post('/upload-image', upload.single('image'), async (req, res) => {
 
   console.log('[UPLOAD] Received request from client:', { client_ip, client_port, server_ip, server_port });
 
+  // Validate required fields
   if (!client_ip || !client_port || !server_ip || !server_port) {
     console.warn('[UPLOAD] Missing required client/server details');
     return res.status(400).json({ error: 'Client and server details are required' });
@@ -77,36 +78,85 @@ router.post('/upload-image', upload.single('image'), async (req, res) => {
 
   const serverKey = buildKey(server_ip, server_port);
   const dbConn = getNextImageDB();
+  if (!dbConn) {
+    console.error('[UPLOAD] No database connection available');
+    return res.status(503).json({ error: 'Service unavailable: No database connection available' });
+  }
   const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
 
   console.log(`[UPLOAD] Using DB: ${dbConn.name} for serverKey: ${serverKey}`);
   console.log(`[UPLOAD] Uploading file: ${req.file.originalname}, size: ${req.file.size} bytes`);
 
+  let uploadStreamId = null;
+
   try {
-    const uploadStream = bucket.openUploadStream(req.file.originalname, {
-      contentType: 'image/png',
+    // Step 1: Upload the image to GridFS with retry logic
+    const imageUrl = await new Promise((resolve, reject) => {
+      const uploadStream = bucket.openUploadStream(req.file.originalname, {
+        contentType: 'image/png',
+      });
+
+      uploadStreamId = uploadStream.id;
+
+      uploadStream.on('error', (err) => {
+        console.error('[UPLOAD] GridFS upload error:', err);
+        reject(new Error('Failed to upload image to GridFS'));
+      });
+
+      uploadStream.on('finish', async () => {
+        try {
+          // Verify the file exists in GridFS
+          const files = await bucket.find({ _id: new mongoose.Types.ObjectId(uploadStreamId) }).toArray();
+          if (files.length === 0) {
+            console.error('[UPLOAD] GridFS file not found after upload');
+            throw new Error('GridFS file not found after upload');
+          }
+          console.log(`[UPLOAD] Successfully uploaded and verified GridFS file: ${uploadStreamId}`);
+          const dbName = dbConn.name;
+          const imageUrl = `${dbName}/images/${uploadStream.id}`;
+          resolve(imageUrl);
+        } catch (err) {
+          reject(err);
+        }
+      });
+
+      uploadStream.end(req.file.buffer);
     });
 
-    uploadStream.end(req.file.buffer);
-
-    uploadStream.on('error', (err) => {
-      console.error('[UPLOAD] GridFS error:', err);
-      res.status(500).json({ error: 'Failed to upload image' });
-    });
-
-    uploadStream.on('finish', async () => {
-      const dbName = dbConn.name;
-      const imageUrl = `${dbName}/images/${uploadStream.id}`;
-
+    // Step 2: Save metadata to recordDb only after successful GridFS upload
+    try {
       const imageRecord = new Image({ serverKey, imageUrl });
       await imageRecord.save();
+      console.log(`[UPLOAD] Successfully saved metadata to recordDb: ${imageUrl}`);
+    } catch (err) {
+      console.error('[UPLOAD] Failed to save metadata to recordDb:', err);
+      // Clean up the GridFS file since metadata save failed
+      try {
+        await bucket.delete(new mongoose.Types.ObjectId(uploadStreamId));
+        console.log(`[UPLOAD] Cleaned up GridFS file due to metadata save failure: ${uploadStreamId}`);
+      } catch (deleteErr) {
+        console.error('[UPLOAD] Failed to clean up GridFS file:', deleteErr);
+      }
+      throw new Error('Failed to save metadata to recordDb');
+    }
 
-      console.log(`[UPLOAD] Successfully uploaded image to ${imageUrl}`);
-      res.json({ message: 'Image uploaded successfully', imageUrl });
-    });
+    // Step 3: Send success response
+    console.log(`[UPLOAD] Image uploaded successfully to ${imageUrl}`);
+    res.json({ message: 'Image uploaded successfully', imageUrl });
   } catch (err) {
-    console.error('[UPLOAD] Handler error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    // Log the error but don't crash the API
+    console.error('[UPLOAD] Handler error:', err.message);
+    // Clean up GridFS file if it exists but an error occurred
+    if (uploadStreamId) {
+      try {
+        await bucket.delete(new mongoose.Types.ObjectId(uploadStreamId));
+        console.log(`[UPLOAD] Cleaned up GridFS file due to error: ${uploadStreamId}`);
+      } catch (deleteErr) {
+        console.error('[UPLOAD] Failed to clean up GridFS file:', deleteErr);
+      }
+    }
+    // Respond with an error but keep the API running
+    res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
 
