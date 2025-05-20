@@ -48,7 +48,7 @@ app.get('/health', async (req, res) => {
     // Check for critical warning
     let criticalWarning = null;
     if (usagePercent >= 90) {
-      criticalWarning = '⚠️ Storage almost full! Add more databases or free space.';
+      criticalWarning = 'Storage almost full! Add more databases or free space.';
     }
 
     const response = {

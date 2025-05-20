@@ -3,6 +3,11 @@ export const serverRegistry = new Map(); // { "ip:port": { lastPing: timestamp }
 export const clientRegistry = new Map(); // { "client_ip:client_port": { serverKey: "ip:port" } }
 export const clientToServerMessages = new Map(); // { "clientKey": [{ serverKey, text, timestamp }] }
 export const serverToClientMessages = new Map(); // { "serverKey": [{ clientKey, text, timestamp }] }
+// Data structure to track client heartbeats: Map<clientKey, { timestamp: number, serverKey: string }>
+export const clientHeartbeatLog = new Map();
+
+// Data structure to store counts: Map<serverKey, number>
+export const heartbeatCounts = new Map();
 
 // Helper Functions
 export const buildKey = (ip, port) => `${ip}:${port}`;

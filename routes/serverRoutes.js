@@ -1,9 +1,53 @@
 import express from 'express';
-import { buildKey, serverRegistry,clientRegistry } from '../utils/registries.js';
+import { buildKey, serverRegistry, clientRegistry, clientHeartbeatLog, heartbeatCounts } from '../utils/registries.js';
+
 const router = express.Router();
 
 
+// Function to update heartbeat counts for all serverKeys
+function updateHeartbeatCounts() {
+    // Clear existing counts
+    heartbeatCounts.clear();
 
+    // Count clientKeys per serverKey
+    const serverKeyCounts = new Map();
+    for (const [clientKey, { serverKey }] of clientHeartbeatLog) {
+        if (!serverKeyCounts.has(serverKey)) {
+            serverKeyCounts.set(serverKey, 0);
+        }
+        serverKeyCounts.set(serverKey, serverKeyCounts.get(serverKey) + 1);
+    }
+
+    // Update heartbeatCounts
+    for (const [serverKey, count] of serverKeyCounts) {
+        heartbeatCounts.set(serverKey, count);
+        console.log(`Heartbeat client count for ${serverKey}: ${count}`);
+    }
+}
+
+// Cleanup function to remove inactive client heartbeats and update counts
+setInterval(() => {
+    const now = Date.now();
+    const threshold = 5 * 60 * 1000; // 5 minutes
+    for (const [clientKey, { timestamp }] of clientHeartbeatLog) {
+        if (now - timestamp > threshold) {
+            clientHeartbeatLog.delete(clientKey);
+            console.log(`Removed inactive client heartbeat: ${clientKey}`);
+        }
+    }
+    updateHeartbeatCounts();
+}, 60 * 1000); // Run every minute
+
+// Middleware to log client heartbeats for /list-servers
+router.use('/list-servers', (req, res, next) => {
+    const { clientKey, serverKey } = req.body;
+    if (clientKey && serverKey) {
+        clientHeartbeatLog.set(clientKey, { timestamp: Date.now(), serverKey });
+        console.log(`Client heartbeat recorded for ${clientKey} on ${serverKey}`);
+        updateHeartbeatCounts(); // Update counts after each heartbeat
+    }
+    next();
+});
 
 // Register a server
 router.post('/register', (req, res) => {
@@ -38,10 +82,9 @@ router.post('/heartbeat', (req, res) => {
 
     serverRegistry.get(serverKey).lastPing = Date.now();
     console.log(`Heartbeat received from ${serverKey}`);
-    res.json({ message: 'Heartbeat acknowledged'});
+    res.json({ message: 'Heartbeat acknowledged' });
 });
 
-// Check if a server is active
 // Check if a server is active and optionally whether a client is associated with it
 router.post('/list-servers', (req, res) => {
     const { serverKey, clientKey } = req.body;
@@ -64,10 +107,14 @@ router.post('/list-servers', (req, res) => {
             return res.json({ message: 'Server Active but not associated' });
         }
     }
-    else{
-        return res.status(400).json({error: 'Client Ip:port required'})
+    else {
+        return res.status(400).json({ error: 'Client Ip:port required' });
     }
-
 });
 
-export default router
+// Exported function to get total heartbeat client count
+export function getHeartbeatClientCount(serverKey) {
+    return heartbeatCounts.get(serverKey) || 0;
+}
+
+export default router;
