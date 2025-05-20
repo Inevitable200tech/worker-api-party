@@ -112,9 +112,9 @@ router.post('/list-servers', (req, res) => {
     }
 });
 
-// Exported function to get total heartbeat client count
-export function getHeartbeatClientCount(serverKey) {
-    return heartbeatCounts.get(serverKey) || 0;
+// Exported function to get total heartbeat client count across all servers
+export function getTotalHeartbeatClientCount() {
+    return clientHeartbeatLog.size;
 }
 
 export default router;

@@ -5,6 +5,7 @@ import clientRoutes from './routes/clientRoutes.js';
 import imageRoutes from './routes/imageRoutes.js';
 import textRoutes from './routes/textRoutes.js';
 import { imageConnections } from './config/db.js';
+import { getTotalHeartbeatClientCount } from './routes/serverRoutes.js';
 
 const app = express();
 
@@ -56,7 +57,8 @@ app.get('/health', async (req, res) => {
       total_Used_MB: totalUsedMB.toFixed(2),
       total_Capacity_MB: totalCapacityMB,
       usage_Percent: usagePercent.toFixed(2),
-      database_Status: overallStatus
+      database_Status: overallStatus,
+      total_Heartbeat_Client_Count: getTotalHeartbeatClientCount()
     };
 
     if (criticalWarning) {
