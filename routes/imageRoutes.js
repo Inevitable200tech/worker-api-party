@@ -237,11 +237,6 @@ router.post('/list-images', async (req, res) => {
     return res.status(400).json({ message: 'Server key is required' });
   }
 
-  // if (!serverRegistry.has(serverKey)) {
-  //     console.warn('[LIST] Server not found or inactive:', serverKey);
-  //     return res.status(404).json({ message: 'Server not found or inactive' });
-  // }
-
   try {
     const rawImages = await Image.find({ serverKey }).select('imageUrl -_id');
 
@@ -250,12 +245,48 @@ router.post('/list-images', async (req, res) => {
       return res.status(404).json({ message: 'No images found' });
     }
 
-    const images = rawImages.map(({ imageUrl }) => {
-      const [dbName, , imageId] = imageUrl.split('/');
-      return { imageUrl: `images/${dbName}/${imageId}` };
-    });
+    const images = [];
+    const deletedImageUrls = [];
 
-    console.log(`[LIST] Found ${images.length} image(s) for ${serverKey}:`);
+    for (const { imageUrl } of rawImages) {
+      const [dbName, , imageId] = imageUrl.split('/');
+      try {
+        const objectId = new mongoose.Types.ObjectId(imageId);
+        const dbConn = imageConnections.find(conn => conn.name === dbName);
+
+        if (!dbConn) {
+          console.warn(`[LIST] No DB connection found for name: ${dbName}, deleting metadata for ${imageUrl}`);
+          deletedImageUrls.push(imageUrl);
+          continue;
+        }
+
+        const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
+        const files = await bucket.find({ _id: objectId }).toArray();
+
+        if (files.length === 0) {
+          console.warn(`[LIST] File ${imageId} not found in DB: ${dbName}, deleting metadata for ${imageUrl}`);
+          deletedImageUrls.push(imageUrl);
+        } else {
+          images.push({ imageUrl: `images/${dbName}/${imageId}` });
+        }
+      } catch (err) {
+        console.warn(`[LIST] Invalid ObjectId or error checking ${imageUrl}: ${err.message}, deleting metadata`);
+        deletedImageUrls.push(imageUrl);
+      }
+    }
+
+    // Delete metadata for non-existent images
+    if (deletedImageUrls.length > 0) {
+      await Image.deleteMany({ imageUrl: { $in: deletedImageUrls } });
+      console.log(`[LIST] Deleted metadata for ${deletedImageUrls.length} non-existent image(s):`, deletedImageUrls);
+    }
+
+    if (images.length === 0) {
+      console.log('[LIST] No valid images found for serverKey:', serverKey);
+      return res.status(404).json({ message: 'No valid images found' });
+    }
+
+    console.log(`[LIST] Found ${images.length} valid image(s) for ${serverKey}:`);
     images.forEach((img, idx) => {
       console.log(`  ${idx + 1}. ${img.imageUrl}`);
     });
@@ -265,7 +296,6 @@ router.post('/list-images', async (req, res) => {
     console.error('[LIST] Error listing images:', error);
     res.status(500).json({ message: 'Server error' });
   }
-
 });
 
 // Endpoint to upload a single chunk
