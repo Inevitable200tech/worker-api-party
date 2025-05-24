@@ -9,8 +9,10 @@ import getZipModel from '../models/zip.js';
 import { Readable } from 'stream';
 import crypto from 'crypto';
 import cron from 'node-cron';
-
-
+import axios from 'axios';
+import dotenv from 'dotenv';
+dotenv.config({ path: 'cert.env' });
+const BASE_URL = process.env.BASE_URL; // Get BASE_URL from .env
 const router = express.Router();
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
@@ -228,6 +230,7 @@ router.delete('/images/:dbName/:imageId', async (req, res) => {
   }
 });
 
+
 router.post('/list-images', async (req, res) => {
   const { serverKey } = req.body;
   console.log('[LIST] Listing images for serverKey:', serverKey);
@@ -235,6 +238,11 @@ router.post('/list-images', async (req, res) => {
   if (!serverKey) {
     console.warn('[LIST] Missing serverKey');
     return res.status(400).json({ message: 'Server key is required' });
+  }
+
+  if (!BASE_URL) {
+    console.error('[LIST] BASE_URL is not defined in .env');
+    return res.status(500).json({ message: 'Server configuration error' });
   }
 
   try {
@@ -250,27 +258,21 @@ router.post('/list-images', async (req, res) => {
 
     for (const { imageUrl } of rawImages) {
       const [dbName, , imageId] = imageUrl.split('/');
+      const formattedUrl = `images/${dbName}/${imageId}`;
+      const fullUrl = `${BASE_URL}/${formattedUrl}`;
+
       try {
-        const objectId = new mongoose.Types.ObjectId(imageId);
-        const dbConn = imageConnections.find(conn => conn.name === dbName);
+        // Verify image existence by making a HEAD request to the image URL
+        const response = await axios.head(fullUrl, { timeout: 5000 });
 
-        if (!dbConn) {
-          console.warn(`[LIST] No DB connection found for name: ${dbName}, deleting metadata for ${imageUrl}`);
-          deletedImageUrls.push(imageUrl);
-          continue;
-        }
-
-        const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
-        const files = await bucket.find({ _id: objectId }).toArray();
-
-        if (files.length === 0) {
-          console.warn(`[LIST] File ${imageId} not found in DB: ${dbName}, deleting metadata for ${imageUrl}`);
-          deletedImageUrls.push(imageUrl);
+        if (response.status === 200) {
+          images.push({ imageUrl: formattedUrl });
         } else {
-          images.push({ imageUrl: `images/${dbName}/${imageId}` });
+          console.warn(`[LIST] Image not found at ${fullUrl}, status: ${response.status}, deleting metadata`);
+          deletedImageUrls.push(imageUrl);
         }
       } catch (err) {
-        console.warn(`[LIST] Invalid ObjectId or error checking ${imageUrl}: ${err.message}, deleting metadata`);
+        console.warn(`[LIST] Error accessing ${fullUrl}: ${err.message}, deleting metadata`);
         deletedImageUrls.push(imageUrl);
       }
     }
