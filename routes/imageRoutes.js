@@ -157,21 +157,23 @@ router.post('/upload-image', upload.single('image'), async (req, res) => {
   }
 });
 
+// GET endpoint to download image
 router.get('/images/:dbName/:imageId', async (req, res) => {
   const { dbName, imageId } = req.params;
   console.log(`[DOWNLOAD] Request for image ${imageId} from DB: ${dbName}`);
 
-  const objectId = new mongoose.Types.ObjectId(imageId);
-
   try {
+    const objectId = new mongoose.Types.ObjectId(imageId);
     const dbConn = imageConnections.find(conn => conn.name === dbName);
+    
     if (!dbConn) {
       console.error(`[DOWNLOAD] No DB connection found for name: ${dbName}`);
       return res.status(500).json({ error: 'Database connection error' });
     }
+    
     const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
-
     const files = await bucket.find({ _id: objectId }).toArray();
+    
     if (files.length === 0) {
       console.warn(`[DOWNLOAD] File ${imageId} not found in DB: ${dbName}`);
       return res.status(404).json({ error: 'File not found' });
@@ -180,24 +182,48 @@ router.get('/images/:dbName/:imageId', async (req, res) => {
     const downloadStream = bucket.openDownloadStream(objectId);
     downloadStream.pipe(res);
 
-    downloadStream.on('close', async () => {
-      console.log(`[DOWNLOAD] Completed streaming ${imageId}, now deleting from DB`);
-      const imageUrl = `${dbName}/images/${imageId}`;
-      console.log(`[DOWNLOAD] Removing metadata for ${imageUrl}`);
-      await Image.deleteOne({ imageUrl });
-
-      bucket.delete(objectId, (err) => {
-        if (err) console.error('[DOWNLOAD] Error deleting file:', err);
-        else console.log(`[DOWNLOAD] Deleted image ${imageId} from GridFS`);
-      });
-    });
-
     downloadStream.on('error', (err) => {
       console.error('[DOWNLOAD] Stream error:', err);
       res.status(500).json({ error: 'Stream failed' });
     });
   } catch (err) {
     console.error('[DOWNLOAD] Handler error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE endpoint to remove image
+router.delete('/images/:dbName/:imageId', async (req, res) => {
+  const { dbName, imageId } = req.params;
+  console.log(`[DELETE] Request to delete image ${imageId} from DB: ${dbName}`);
+
+  try {
+    const objectId = new mongoose.Types.ObjectId(imageId);
+    const dbConn = imageConnections.find(conn => conn.name === dbName);
+    
+    if (!dbConn) {
+      console.error(`[DELETE] No DB connection found for name: ${dbName}`);
+      return res.status(500).json({ error: 'Database connection error' });
+    }
+    
+    const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
+    const files = await bucket.find({ _id: objectId }).toArray();
+    
+    if (files.length === 0) {
+      console.warn(`[DELETE] File ${imageId} not found in DB: ${dbName}`);
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const imageUrl = `${dbName}/images/${imageId}`;
+    console.log(`[DELETE] Removing metadata for ${imageUrl}`);
+    await Image.deleteOne({ imageUrl });
+
+    await bucket.delete(objectId);
+    console.log(`[DELETE] Deleted image ${imageId} from GridFS`);
+    
+    res.status(200).json({ message: 'Image deleted successfully' });
+  } catch (err) {
+    console.error('[DELETE] Handler error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
