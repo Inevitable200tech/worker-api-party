@@ -231,28 +231,17 @@ router.delete('/images/:dbName/:imageId', async (req, res) => {
 });
 
 router.post('/list-images', async (req, res) => {
-  const { serverKey, page = 1, limit = 50 } = req.body;
-  console.log('[LIST] Listing images for serverKey:', serverKey, 'Page:', page, 'Limit:', limit);
+  const { serverKey } = req.body;
+  console.log('[LIST] Listing images for serverKey:', serverKey);
 
   if (!serverKey) {
     console.warn('[LIST] Missing serverKey');
     return res.status(400).json({ message: 'Server key is required' });
   }
 
-  if (!BASE_URL) {
-    console.error('[LIST] BASE_URL is not defined in .env');
-    return res.status(500).json({ message: 'Server configuration error' });
-  }
-
   try {
-    const pageNum = parseInt(page, 10);
-    const limitNum = Math.min(parseInt(limit, 10), 50); // Cap limit at 50
-    const skipNum = (pageNum - 1) * limitNum;
-
-    const rawImages = await Image.find({ serverKey })
-      .select('imageUrl -_id')
-      .skip(skipNum)
-      .limit(limitNum);
+    // Limit to 50 images
+    const rawImages = await Image.find({ serverKey }).select('imageUrl -_id').limit(50);
 
     if (rawImages.length === 0) {
       console.log('[LIST] No images found for serverKey:', serverKey);
@@ -264,23 +253,32 @@ router.post('/list-images', async (req, res) => {
 
     for (const { imageUrl } of rawImages) {
       const [dbName, , imageId] = imageUrl.split('/');
-      const formattedUrl = `images/${dbName}/${imageId}`;
-      const fullUrl = `${BASE_URL}/${formattedUrl}`;
-
       try {
-        const response = await axios.head(fullUrl, { timeout: 5000 });
-        if (response.status === 200) {
-          images.push(formattedUrl);
-        } else {
-          console.warn(`[LIST] Image not found at ${fullUrl}, status: ${response.status}, deleting metadata`);
+        const objectId = new mongoose.Types.ObjectId(imageId);
+        const dbConn = imageConnections.find(conn => conn.name === dbName);
+
+        if (!dbConn) {
+          console.warn(`[LIST] No DB connection found for name: ${dbName}, deleting metadata for ${imageUrl}`);
           deletedImageUrls.push(imageUrl);
+          continue;
+        }
+
+        const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
+        const files = await bucket.find({ _id: objectId }).toArray();
+
+        if (files.length === 0) {
+          console.warn(`[LIST] File ${imageId} not found in DB: ${dbName}, deleting metadata for ${imageUrl}`);
+          deletedImageUrls.push(imageUrl);
+        } else {
+          images.push({ imageUrl: `images/${dbName}/${imageId}` });
         }
       } catch (err) {
-        console.warn(`[LIST] Error accessing ${fullUrl}: ${err.message}, deleting metadata`);
+        console.warn(`[LIST] Invalid ObjectId or error checking ${imageUrl}: ${err.message}, deleting metadata`);
         deletedImageUrls.push(imageUrl);
       }
     }
 
+    // Delete metadata for non-existent images
     if (deletedImageUrls.length > 0) {
       await Image.deleteMany({ imageUrl: { $in: deletedImageUrls } });
       console.log(`[LIST] Deleted metadata for ${deletedImageUrls.length} non-existent image(s):`, deletedImageUrls);
@@ -292,8 +290,8 @@ router.post('/list-images', async (req, res) => {
     }
 
     console.log(`[LIST] Found ${images.length} valid image(s) for ${serverKey}:`);
-    images.forEach((url, idx) => {
-      console.log(`  ${idx + 1}. ${url}`);
+    images.forEach((img, idx) => {
+      console.log(`  ${idx + 1}. ${img.imageUrl}`);
     });
 
     res.json(images);
