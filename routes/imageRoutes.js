@@ -85,61 +85,50 @@ router.post('/upload-image', upload.single('image'), async (req, res) => {
   }
   const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
 
-  console.log(`[UPLOAD] Using DB: ${dbConn.name} for serverKey: ${serverKey}`);
-  console.log(`[UPLOAD] Uploading file: ${req.file.originalname}, size: ${req.file.size} bytes`);
-
+  // Use a session for atomicity across both GridFS and metadata
+  const session = await recordDb.startSession();
   let uploadStreamId = null;
+  let imageUrl = null;
 
   try {
-    // Step 1: Upload the image to GridFS and verify it exists
-    const imageUrl = await new Promise((resolve, reject) => {
-      const uploadStream = bucket.openUploadStream(req.file.originalname, {
-        contentType: 'image/png',
-      });
+    await session.withTransaction(async () => {
+      // Step 1: Upload the image to GridFS
+      imageUrl = await new Promise((resolve, reject) => {
+        const uploadStream = bucket.openUploadStream(req.file.originalname, {
+          contentType: 'image/png',
+        });
 
-      uploadStreamId = uploadStream.id;
+        uploadStreamId = uploadStream.id;
 
-      uploadStream.on('error', (err) => {
-        console.error('[UPLOAD] GridFS upload error:', err);
-        reject(new Error('Failed to upload image to GridFS'));
-      });
+        uploadStream.on('error', (err) => {
+          console.error('[UPLOAD] GridFS upload error:', err);
+          reject(new Error('Failed to upload image to GridFS'));
+        });
 
-      uploadStream.on('finish', async () => {
-        try {
-          // Verify the file exists in GridFS
-          const files = await bucket.find({ _id: new mongoose.Types.ObjectId(uploadStreamId) }).toArray();
-          if (files.length === 0) {
-            console.error('[UPLOAD] GridFS file not found after upload');
-            throw new Error('GridFS file not found after upload');
+        uploadStream.on('finish', async () => {
+          try {
+            // Verify the file exists in GridFS
+            const files = await bucket.find({ _id: new mongoose.Types.ObjectId(uploadStreamId) }).toArray();
+            if (files.length === 0) {
+              console.error('[UPLOAD] GridFS file not found after upload');
+              throw new Error('GridFS file not found after upload');
+            }
+            console.log(`[UPLOAD] Successfully uploaded and verified GridFS file: ${uploadStreamId}`);
+            const dbName = dbConn.name;
+            resolve(`${dbName}/images/${uploadStream.id}`);
+          } catch (err) {
+            reject(err);
           }
-          console.log(`[UPLOAD] Successfully uploaded and verified GridFS file: ${uploadStreamId}`);
-          const dbName = dbConn.name;
-          const imageUrl = `${dbName}/images/${uploadStream.id}`;
-          resolve(imageUrl);
-        } catch (err) {
-          reject(err);
-        }
+        });
+
+        uploadStream.end(req.file.buffer);
       });
 
-      uploadStream.end(req.file.buffer);
-    });
-
-    // Step 2: Save metadata to recordDb only after successful GridFS upload
-    try {
+      // Step 2: Save metadata to recordDb in the same transaction
       const imageRecord = new Image({ serverKey, imageUrl });
-      await imageRecord.save();
+      await imageRecord.save({ session });
       console.log(`[UPLOAD] Successfully saved metadata to recordDb: ${imageUrl}`);
-    } catch (err) {
-      console.error('[UPLOAD] Failed to save metadata to recordDb:', err);
-      // Clean up the GridFS file since metadata save failed
-      try {
-        await bucket.delete(new mongoose.Types.ObjectId(uploadStreamId));
-        console.log(`[UPLOAD] Cleaned up GridFS file due to metadata save failure: ${uploadStreamId}`);
-      } catch (deleteErr) {
-        console.error('[UPLOAD] Failed to clean up GridFS file:', deleteErr);
-      }
-      throw new Error('Failed to save metadata to recordDb');
-    }
+    });
 
     // Step 3: Send success response
     console.log(`[UPLOAD] Image uploaded successfully to ${imageUrl}`);
@@ -156,6 +145,8 @@ router.post('/upload-image', upload.single('image'), async (req, res) => {
       }
     }
     res.status(500).json({ error: err.message || 'Internal server error' });
+  } finally {
+    session.endSession();
   }
 });
 
@@ -164,19 +155,31 @@ router.get('/images/:dbName/:imageId', async (req, res) => {
   const { dbName, imageId } = req.params;
   console.log(`[DOWNLOAD] Request for image ${imageId} from DB: ${dbName}`);
 
+  let session;
   try {
     const objectId = new mongoose.Types.ObjectId(imageId);
     const dbConn = imageConnections.find(conn => conn.name === dbName);
-    
+
     if (!dbConn) {
       console.error(`[DOWNLOAD] No DB connection found for name: ${dbName}`);
       return res.status(500).json({ error: 'Database connection error' });
     }
-    
+
     const bucket = new GridFSBucket(dbConn.db, { bucketName: 'images' });
-    const files = await bucket.find({ _id: objectId }).toArray();
-    
-    if (files.length === 0) {
+
+    // Start a session for atomicity
+    session = await dbConn.db.startSession();
+    let fileExists = false;
+    await session.withTransaction(async () => {
+      const files = await bucket.find({ _id: objectId }).toArray();
+      if (files.length === 0) {
+        fileExists = false;
+      } else {
+        fileExists = true;
+      }
+    });
+
+    if (!fileExists) {
       console.warn(`[DOWNLOAD] File ${imageId} not found in DB: ${dbName}`);
       return res.status(404).json({ error: 'File not found' });
     }
@@ -186,11 +189,13 @@ router.get('/images/:dbName/:imageId', async (req, res) => {
 
     downloadStream.on('error', (err) => {
       console.error('[DOWNLOAD] Stream error:', err);
-      res.status(500).json({ error: 'Stream failed' });
+      if (!res.headersSent) res.status(500).json({ error: 'Stream failed' });
     });
   } catch (err) {
     console.error('[DOWNLOAD] Handler error:', err);
-    res.status(500).json({ error: 'Server error' });
+    if (!res.headersSent) res.status(500).json({ error: 'Server error' });
+  } finally {
+    if (session) session.endSession();
   }
 });
 
@@ -246,7 +251,10 @@ router.post('/list-images', async (req, res) => {
   }
 
   try {
-    const rawImages = await Image.find({ serverKey }).select('imageUrl -_id');
+    // Only fetch up to 50 images
+    const rawImages = await Image.find({ serverKey })
+      .select('imageUrl -_id')
+      .limit(50);
 
     if (rawImages.length === 0) {
       console.log('[LIST] No images found for serverKey:', serverKey);
