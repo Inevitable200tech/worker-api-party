@@ -230,10 +230,9 @@ router.delete('/images/:dbName/:imageId', async (req, res) => {
   }
 });
 
-
 router.post('/list-images', async (req, res) => {
-  const { serverKey } = req.body;
-  console.log('[LIST] Listing images for serverKey:', serverKey);
+  const { serverKey, page = 1, limit = 50 } = req.body;
+  console.log('[LIST] Listing images for serverKey:', serverKey, 'Page:', page, 'Limit:', limit);
 
   if (!serverKey) {
     console.warn('[LIST] Missing serverKey');
@@ -246,7 +245,14 @@ router.post('/list-images', async (req, res) => {
   }
 
   try {
-    const rawImages = await Image.find({ serverKey }).select('imageUrl -_id');
+    const pageNum = parseInt(page, 10);
+    const limitNum = Math.min(parseInt(limit, 10), 50); // Cap limit at 50
+    const skipNum = (pageNum - 1) * limitNum;
+
+    const rawImages = await Image.find({ serverKey })
+      .select('imageUrl -_id')
+      .skip(skipNum)
+      .limit(limitNum);
 
     if (rawImages.length === 0) {
       console.log('[LIST] No images found for serverKey:', serverKey);
@@ -262,11 +268,9 @@ router.post('/list-images', async (req, res) => {
       const fullUrl = `${BASE_URL}/${formattedUrl}`;
 
       try {
-        // Verify image existence by making a HEAD request to the image URL
         const response = await axios.head(fullUrl, { timeout: 5000 });
-
         if (response.status === 200) {
-          images.push({ imageUrl: formattedUrl });
+          images.push(formattedUrl);
         } else {
           console.warn(`[LIST] Image not found at ${fullUrl}, status: ${response.status}, deleting metadata`);
           deletedImageUrls.push(imageUrl);
@@ -277,7 +281,6 @@ router.post('/list-images', async (req, res) => {
       }
     }
 
-    // Delete metadata for non-existent images
     if (deletedImageUrls.length > 0) {
       await Image.deleteMany({ imageUrl: { $in: deletedImageUrls } });
       console.log(`[LIST] Deleted metadata for ${deletedImageUrls.length} non-existent image(s):`, deletedImageUrls);
@@ -289,8 +292,8 @@ router.post('/list-images', async (req, res) => {
     }
 
     console.log(`[LIST] Found ${images.length} valid image(s) for ${serverKey}:`);
-    images.forEach((img, idx) => {
-      console.log(`  ${idx + 1}. ${img.imageUrl}`);
+    images.forEach((url, idx) => {
+      console.log(`  ${idx + 1}. ${url}`);
     });
 
     res.json(images);
