@@ -559,6 +559,53 @@ function scheduleDeletionLogger() {
   });
 }
 
+async function scheduleCollectionMaintenance() {
+  cron.schedule('0 2 * * *', async () => {
+    console.log('[COLLECTION-MAINTENANCE] Starting storage maintenance for all databases');
+
+    for (const dbConn of imageConnections) {
+      const dbName = dbConn.name;
+      const db = dbConn.db;
+      const collections = ['images.chunks', 'images.files', 'zips.chunks', 'zips.files'];
+
+      for (const collectionName of collections) {
+        try {
+          const stats = await db.command({ collStats: collectionName });
+          const docCount = stats.count || 0;
+          const storageSizeMB = stats.storageSize / (1024 * 1024);
+          const logicalSizeMB = stats.size / (1024 * 1024);
+
+          console.log(`[COLLECTION-MAINTENANCE] Stats for ${dbName}/${collectionName}:`);
+          console.log(`  Documents: ${docCount}, Logical Size: ${logicalSizeMB.toFixed(2)} MB, Storage Size: ${storageSizeMB.toFixed(2)} MB`);
+
+          if (docCount === 0) {
+            try {
+              await db.dropCollection(collectionName);
+              console.log(`[COLLECTION-MAINTENANCE] Dropped empty collection ${dbName}/${collectionName}`);
+            } catch (dropErr) {
+              console.error(`[COLLECTION-MAINTENANCE] Error dropping ${dbName}/${collectionName}:`, dropErr);
+            }
+          } else {
+            try {
+              await db.command({ compact: collectionName });
+              console.log(`[COLLECTION-MAINTENANCE] Compacted collection ${dbName}/${collectionName}`);
+              const newStats = await db.command({ collStats: collectionName });
+              console.log(`[COLLECTION-MAINTENANCE] Post-compact stats for ${dbName}/${collectionName}:`);
+              console.log(`  Storage Size: ${(newStats.storageSize / (1024 * 1024)).toFixed(2)} MB`);
+            } catch (compactErr) {
+              console.error(`[COLLECTION-MAINTENANCE] Error compacting ${dbName}/${collectionName}:`, compactErr);
+            }
+          }
+        } catch (statsErr) {
+          console.error(`[COLLECTION-MAINTENANCE] Error getting stats for ${dbName}/${collectionName}:`, statsErr);
+        }
+      }
+    }
+
+    console.log('[COLLECTION-MAINTENANCE] Completed storage maintenance');
+  });
+}
+
 
 export default router;
 export { router as imageRouter };
