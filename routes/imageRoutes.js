@@ -560,7 +560,7 @@ function scheduleDeletionLogger() {
 }
 
 async function scheduleCollectionMaintenance() {
-  cron.schedule('*/15 * * * *', async () => {
+  cron.schedule('0 2 * * *', async () => {
     console.log('[COLLECTION-MAINTENANCE] Starting storage maintenance for all databases');
 
     for (const dbConn of imageConnections) {
