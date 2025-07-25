@@ -606,6 +606,8 @@ async function scheduleCollectionMaintenance() {
   });
 }
 
+scheduleCollectionMaintenance();
+
 
 export default router;
 export { router as imageRouter };
